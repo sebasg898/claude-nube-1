@@ -9,57 +9,52 @@ falta un dato, y un **Resumen de la bolsa de horas** que se recalcula solo con f
 1. Abre `Control-de-asistencia-QALEN.html` (doble clic; funciona sin internet).
 2. **Procesar mes** → arrastra el `.xls` del reloj. Elige "Calcular hasta el día" (por defecto: último día hábil del mes).
 3. Revisa en pantalla (cada persona se expande día por día) y pulsa **Descargar Excel**.
-4. En el Excel: hoja **Por revisar** → "Ir ›" → completa lo amarillo en **Asistencia**. **Resumen** y **Semanal** se actualizan solos.
-5. Al cerrar el mes: **Personas y reglas → Leer saldos de un Excel terminado** para pasar los saldos al mes siguiente.
+4. En el Excel, hoja **Asistencia**: completa lo amarillo (hora o motivo). **Resumen** y **Semanal** se actualizan solos.
 
-Nada sale de la computadora. La configuración se guarda en el navegador (con respaldo JSON).
+Nada sale de la computadora. La configuración (personas y reglas) se guarda en el navegador, con respaldo JSON.
 
-## Excel generado
+## Excel generado (4 hojas)
 
 | Hoja | Qué tiene |
 |---|---|
-| Leeme | Cómo usarlo, colores y reglas. |
-| Por revisar | Lista de casos con enlace a la celda y estado que cambia solo (Falta completar / Listo). |
-| Asistencia | Por persona: Reloj · Entrada · Salida · Motivo · Horas trabajadas · A favor · En contra · Estado. Columnas = días (como la hoja de Yasmín). |
-| Semanal | Trabajadas / a favor / en contra / neto por semana (lunes a sábado), con `SUMAR.SI`. |
-| Resumen | Bolsa de horas: saldo anterior + a favor − en contra − castigo − pagadas = saldo final (le debemos / nos debe). |
-| Configuracion | Reglas, personas (horarios), motivos y feriados. Lo único que las fórmulas consultan como parámetros. |
-| Reloj original | Copia fiel del reporte del reloj. |
+| Leeme | Cómo usarlo, motivos, colores y reglas. |
+| Asistencia | Por persona: Reloj · Entrada (verde) · Salida (naranja) · Motivo · Horas trabajadas · A favor · En contra · Compensadas. Columnas = días, con líneas por semana; total y conteo de datos por completar por persona. |
+| Semanal | Trabajadas / a favor / en contra / compensadas / saldo por semana (lunes a sábado). |
+| Resumen | Faltas · horas trabajadas · horas base del mes · a favor · en contra · compensadas · **SALDO del mes** (verde le debemos / rojo nos debe) · datos por completar. |
 
-- La página decide **entrada y salida** (o las deja vacías si hay duda); todo lo demás son fórmulas simples (`SI`, `MIN`, `MAX`, `BUSCARV`, `CONTAR.SI`, `SUMAR.SI`), sin funciones dinámicas.
-- Hojas protegidas **sin contraseña** (aviso, no traba). `fullCalcOnLoad` activado.
-- Validaciones con confirmación: hora fuera de formato, salida antes que la entrada (típico de escribir 6:14 en vez de 18:14).
-- Colores: amarillo = falta dato · azul = hora escrita a mano (no está en el reloj) · rojo = revisar horas · verde = con motivo · gris = fórmula.
+- La página decide **entrada y salida** (o las deja vacías si hay duda); todo lo demás son fórmulas simples (`SI`, `MIN`, `CONTAR.SI`, `CONTAR.SI.CONJUNTO`, `SUMAR.SI`, `SUMAPRODUCTO`). El horario de cada persona va en columnas ocultas de Asistencia.
+- Hojas protegidas **sin contraseña**. `fullCalcOnLoad` activado. Validaciones: hora fuera de formato o salida antes que la entrada (aviso con confirmación); motivo solo de la lista.
 
-## Reglas (configurables)
+## Reglas
 
-- Entrada 08:30; salida L-V 18:00; sábado 12:00. Por persona se puede cambiar (p. ej. medio tiempo).
-- **Extras**: solo si sale 20 min o más después de su hora (18:20 / 12:20); se cuentan desde su hora (18:00 / 12:00).
-- **Tardanza**: resta de la bolsa solo si es de **60 min o más** (criterio observado en la hoja de Yasmín; con 0 resta toda tardanza).
-- **Salida antes de hora**: resta.
-- **Llegar temprano**: suma solo a quien tiene configurado "cuenta si llega antes de" (p. ej. 07:45).
-- **Permiso / Estudia** sin marcadas: resta la jornada (horas semanales ÷ 6, máx. el horario del día). **Falta**: no toca la bolsa; se cuenta aparte.
-- **Domingo / feriado** trabajado: todo el tiempo suma a favor (factor configurable).
+- Entrada 08:30; salida L-V 18:00; sábado 12:00 (por persona se puede cambiar en la página).
+- **Tardanza** (después de las 08:30) y **salida antes de hora**: horas en contra.
+- **Llegar antes de las 08:00**: horas a favor (desde la llegada hasta las 08:30).
+- **Extras**: si sale 20 min o más después de su hora (18:20 / 12:20), se cuentan desde las 18:00 / 12:00.
+- **Domingo / feriado** trabajado: todo el tiempo es a favor.
+- **Motivos** (lista cerrada):
+  - *Vacaciones* / *Salud*: día completo trabajado (nada en contra).
+  - *Compensado*: canje de horas a favor; lo que falte del día (o la jornada) va a **Compensadas**.
+  - *Estudio*: lo que falte del día (o la jornada) es hora en contra.
+  - *Falta*: la jornada es hora en contra y se cuenta como falta.
+  - Jornada = horas semanales ÷ 6 (8 h; sábado máx. 3:30).
+- **SALDO del mes** = a favor − en contra − compensadas. **Horas base del mes** = días laborables (L-S, sin feriados) × horas semanales ÷ 6.
 - Personas con "Descuenta" = No (casos especiales): no se les resta nada.
 - Marcadas a menos de 3 min se consideran duplicadas.
 
 ### Clasificación de marcadas
 
 Entrada = primera marcada antes de las 11:00. Salida = última marcada desde las 16:30 (L-V; o 90 min antes de su salida) o
-después de las 11:00 (sábado). Almuerzo (informativo) = marcadas entre 12:00 y 15:30. Lo que no encaja **no se adivina**:
-queda en amarillo (sin salida, sin entrada, una sola marcada, día sin marcadas). Para personas de reparto se sugiere la
-hora de salida, pero siempre se pregunta. Horas antes de 06:30 / después de 22:00 y más de 3 h de extras se listan para mirar.
+después de las 11:00 (sábado). Lo que no encaja **no se adivina**: queda en amarillo (sin salida, sin entrada, una sola
+marcada, día sin marcadas), con la explicación como comentario en la celda de la fila Reloj.
 
 ## Diferencias conocidas
 
-**Con el reloj:** las tardanzas del "Reporte Estadístico" del reloj usan su propia tolerancia; aquí no se usan esas hojas
-(solo "Reporte de Asistencia") y la tardanza se mide desde 08:30 exacto. No tienen por qué coincidir.
+**Con el reloj:** las tardanzas de las hojas de cálculo del propio reloj usan su propia tolerancia; aquí solo se usa
+"Reporte de Asistencia" y la tardanza se mide desde 08:30 exacto.
 
-**Con la hoja SETIEMBRE de Yasmín** (validado con pruebas que viven en `/samples/tests`, fuera del repo, porque usan datos reales):
-- Entradas/salidas: coinciden en todos los días normales (185). Solo difieren 3 días, por errores de tipeo en la hoja manual.
-- Todo día que ella completó a mano aparece en "Por revisar".
-- "En contra" (compensadas) coincide en todas las personas. "A favor" coincide exacto en 3 personas; en el resto la diferencia
-  se explica por salidas de 18:21–18:29 de la última semana que no se contaron a mano, los tipeos y un caso de llegada temprana en sábado.
+**Con la hoja manual de setiembre** (pruebas privadas en `/samples/tests`): entradas/salidas coinciden en todos los días
+normales (185); solo difieren 3 días por errores de tipeo en la hoja manual, y todo día completado a mano aparece en amarillo.
 
 ## Desarrollo
 
@@ -73,6 +68,6 @@ npm run entrega    # genera entrega/Control-de-asistencia-QALEN.html (un solo ar
 Código: `src/lib/parser.ts` (lectura del reloj), `rules.ts` (clasificación y cálculo de referencia),
 `model.ts` (mes), `excel.ts` (Excel con fórmulas que replican `calcularDia`), `src/ui/*` (pantallas).
 La prueba `tests/excel-sintetico.test.ts` (datos inventados) recalcula el Excel con LibreOffice y verifica que cada número coincida
-con la página, y que editar una celda cambie Semanal y Resumen.
+con la página, y que completar horas o elegir motivos cambie Semanal y Resumen.
 
 **Privacidad:** `/samples` y todo `.xls/.xlsx` están en `.gitignore`. No subir datos de personas.

@@ -6,9 +6,12 @@ import { parseHHMM } from '../src/lib/time';
 const cfg = configInicial(2026);
 const h = (s: string) => parseHHMM(s)!;
 const base = (cambios: Partial<Persona> = {}): Persona => ({ ...personaNueva({ id: '1', nombre: 'Prueba' }, new Set(), true), ...cambios });
-const dia = (marcas: string[], tipo: 'LV' | 'SAB' | 'DOM' | 'FER' = 'LV', p = base(), motivo = '') => {
+type Tipo = 'LV' | 'SAB' | 'DOM' | 'FER';
+const calc = (e: string | null, s: string | null, motivo = '', tipo: Tipo = 'LV', p = base(), r = cfg.reglas) =>
+  calcularDia({ entrada: e ? h(e) : null, salida: s ? h(s) : null, motivo }, tipo, p, r, true);
+const dia = (marcas: string[], tipo: Tipo = 'LV', p = base()) => {
   const c = clasificar(marcas.map(h), tipo, p, true);
-  return { c, r: calcularDia({ entrada: c.entrada, salida: c.salida, motivo }, tipo, p, cfg.reglas, cfg.motivos, true) };
+  return { c, r: calcularDia({ entrada: c.entrada, salida: c.salida, motivo: '' }, tipo, p, cfg.reglas, true) };
 };
 
 describe('marcadas', () => {
@@ -20,8 +23,7 @@ describe('marcadas', () => {
 
   it('sin salida (la última es el almuerzo): queda por completar, sin inventar nada', () => {
     const { c, r } = dia(['08:10', '13:01', '13:45']);
-    expect(c.entrada).toBe(h('08:10'));
-    expect(c.salida).toBeNull();
+    expect([c.entrada, c.salida]).toEqual([h('08:10'), null]);
     expect(c.casos.map((x) => [x.tipo, x.faltaDato])).toEqual([['sin_salida', true]]);
     expect(r.pendiente).toBe(true);
   });
@@ -39,12 +41,10 @@ describe('marcadas', () => {
     expect(dia(['18:14']).c.salida).toBe(h('18:14'));
   });
 
-  it('día sin marcadas: por completar (sugerencia Falta)', () => {
+  it('día sin marcadas: por completar', () => {
     const { c, r } = dia([]);
-    expect(c.casos[0]).toMatchObject({ tipo: 'sin_marcadas', faltaDato: true, sugerencia: 'Falta' });
+    expect(c.casos[0]).toMatchObject({ tipo: 'sin_marcadas', faltaDato: true });
     expect(r.pendiente).toBe(true);
-    const conMotivo = calcularDia({ entrada: null, salida: null, motivo: 'Falta' }, 'LV', base(), cfg.reglas, cfg.motivos, true);
-    expect([conMotivo.pendiente, conMotivo.falta, conMotivo.contra]).toEqual([false, true, 0]);
   });
 
   it('horas raras se resaltan pero se usan', () => {
@@ -54,67 +54,79 @@ describe('marcadas', () => {
   });
 });
 
-describe('bolsa de horas', () => {
+describe('horas a favor / en contra', () => {
   it('salida 18:19 no da extras; 18:20 sí (desde las 18:00)', () => {
-    expect(dia(['08:30', '18:19']).r.favor).toBe(0);
-    expect(dia(['08:30', '18:20']).r.favor).toBe(20);
-    expect(dia(['08:30', '19:05']).r.favor).toBe(65);
+    expect(calc('08:30', '18:19').favor).toBe(0);
+    expect(calc('08:30', '18:20').favor).toBe(20);
+    expect(calc('08:30', '19:05').favor).toBe(65);
+    expect(calc('08:30', '21:00').favor).toBe(180);
   });
 
-  it('3 horas de extras', () => {
-    expect(dia(['08:30', '21:00']).r.favor).toBe(180);
+  it('toda tardanza (después de las 08:30) es hora en contra', () => {
+    expect(calc('08:30', '18:00').contra).toBe(0);
+    expect(calc('08:31', '18:00').contra).toBe(1);
+    expect(calc('09:41', '18:00').contra).toBe(71);
+    expect(calc('08:30', '17:52').contra).toBe(8);
   });
 
-  it('sábado normal y con extras', () => {
-    expect(dia(['08:26', '12:19'], 'SAB').r).toMatchObject({ favor: 0, contra: 0, trabajado: 233 });
-    expect(dia(['08:04', '15:37'], 'SAB').r.favor).toBe(217);
-    // Última marcada antes de las 11:00 en sábado: no se asume salida, queda por completar
+  it('llegar antes de las 08:00 es hora a favor (hasta las 08:30)', () => {
+    expect(calc('08:05', '18:00').favor).toBe(0);
+    expect(calc('07:59', '18:00').favor).toBe(31);
+    expect(calc('06:37', '18:01').favor).toBe(113);
+  });
+
+  it('sábado normal, con extras y salida temprana', () => {
+    expect(calc('08:26', '12:19', '', 'SAB')).toMatchObject({ favor: 0, contra: 0, trabajado: 233 });
+    expect(calc('08:04', '15:37', '', 'SAB').favor).toBe(217);
+    expect(calc('08:30', '10:42', '', 'SAB').contra).toBe(78);
     expect(dia(['07:51', '10:42'], 'SAB').r.pendiente).toBe(true);
-    const r = calcularDia({ entrada: h('07:51'), salida: h('10:42'), motivo: 'Permiso' }, 'SAB', base(), cfg.reglas, cfg.motivos, true);
-    expect(r.contra).toBe(78); // salió antes de las 12:00
   });
 
   it('feriado / domingo trabajado: todo suma a favor', () => {
-    expect(dia(['09:00', '13:00'], 'FER').r).toMatchObject({ favor: 240, enFeriado: 240, contra: 0 });
-    const doble = calcularDia({ entrada: h('09:00'), salida: h('13:00'), motivo: '' }, 'DOM', base(), { ...cfg.reglas, factorFeriado: 2 }, cfg.motivos, true);
-    expect(doble.favor).toBe(480);
-  });
-
-  it('tardanza solo resta desde el umbral; salida temprana siempre', () => {
-    expect(dia(['08:59', '18:00']).r.contra).toBe(0);
-    expect(dia(['09:41', '18:00']).r.contra).toBe(71);
-    expect(dia(['08:30', '17:52']).r.contra).toBe(8);
-    const sinUmbral = calcularDia({ entrada: h('08:31'), salida: h('18:00'), motivo: '' }, 'LV', base(), { ...cfg.reglas, tardanzaDesde: 0 }, cfg.motivos, true);
-    expect(sinUmbral.contra).toBe(1);
-  });
-
-  it('llegar temprano solo suma a quien lo tiene configurado', () => {
-    expect(dia(['06:37', '18:01']).r.favor).toBe(0);
-    expect(dia(['06:37', '18:01'], 'LV', base({ tempranoAntesDe: h('07:45') })).r.favor).toBe(113);
-    expect(dia(['07:50', '18:01'], 'LV', base({ tempranoAntesDe: h('07:45') })).r.favor).toBe(0);
-  });
-
-  it('permiso / estudia sin marcadas resta la jornada; no si la persona no descuenta', () => {
-    const c = (p: Persona, tipo: 'LV' | 'SAB') => calcularDia({ entrada: null, salida: null, motivo: 'Estudia' }, tipo, p, cfg.reglas, cfg.motivos, true).contra;
-    expect(c(base(), 'LV')).toBe(480);
-    expect(c(base(), 'SAB')).toBe(210);
-    expect(c(base({ horasSemanales: 24 }), 'LV')).toBe(240);
-    expect(c(base({ descuenta: false }), 'LV')).toBe(0);
-  });
-
-  it('caso especial: medio tiempo con extras desde las 18:00', () => {
-    const seb = base({ horasSemanales: 24, salidaLV: h('12:00'), extrasDesdeLV: h('18:00'), descuenta: false });
-    expect(dia(['08:31', '12:14'], 'LV', seb).r).toMatchObject({ favor: 0, contra: 0, pendiente: false });
-    expect(dia(['08:31', '18:47'], 'LV', seb).r.favor).toBe(47);
+    expect(calc('09:00', '13:00', '', 'FER')).toMatchObject({ favor: 240, enFeriado: 240, contra: 0 });
+    expect(calc('09:00', '13:00', '', 'DOM', base(), { ...cfg.reglas, factorFeriado: 2 }).favor).toBe(480);
   });
 
   it('salida antes que la entrada (formato 12 h) da alerta', () => {
-    const r = calcularDia({ entrada: h('08:30'), salida: h('06:14'), motivo: '' }, 'LV', base(), cfg.reglas, cfg.motivos, true);
-    expect(r.alerta).toBe(true);
+    expect(calc('08:30', '06:14').alerta).toBe(true);
   });
 
   it('antes de la fecha de ingreso no cuenta nada', () => {
-    const r = calcularDia({ entrada: null, salida: null, motivo: '' }, 'LV', base(), cfg.reglas, cfg.motivos, false);
-    expect(r).toMatchObject({ pendiente: false, favor: 0, contra: 0 });
+    const r = calcularDia({ entrada: null, salida: null, motivo: '' }, 'LV', base(), cfg.reglas, false);
+    expect(r).toMatchObject({ pendiente: false, favor: 0, contra: 0, compensado: 0 });
+  });
+});
+
+describe('motivos', () => {
+  it('Vacaciones y Salud: día completo trabajado, sin nada en contra', () => {
+    for (const m of ['Vacaciones', 'Salud']) {
+      expect(calc(null, null, m)).toMatchObject({ pendiente: false, contra: 0, favor: 0, compensado: 0, trabajado: 570 - 45 });
+      expect(calc(null, null, m, 'SAB')).toMatchObject({ contra: 0, trabajado: 210 });
+    }
+  });
+
+  it('Falta: la jornada es hora en contra y cuenta como falta', () => {
+    expect(calc(null, null, 'Falta')).toMatchObject({ pendiente: false, falta: true, contra: 480, favor: 0 });
+    expect(calc(null, null, 'Falta', 'SAB').contra).toBe(210);
+  });
+
+  it('Estudio: horas en contra (día completo o lo que faltó)', () => {
+    expect(calc(null, null, 'Estudio')).toMatchObject({ pendiente: false, contra: 480 });
+    expect(calc('08:30', '13:00', 'Estudio')).toMatchObject({ contra: 300, compensado: 0 });
+    expect(calc('08:30', null, 'Estudio').pendiente).toBe(true);
+  });
+
+  it('Compensado: lo que falta va a compensadas, no a en contra', () => {
+    expect(calc(null, null, 'Compensado')).toMatchObject({ pendiente: false, contra: 0, compensado: 480 });
+    expect(calc('08:40', '16:00', 'Compensado')).toMatchObject({ contra: 0, compensado: 10 + 120 });
+    expect(calc('08:30', null, 'Compensado').pendiente).toBe(true);
+  });
+
+  it('medio tiempo / jornada distinta y personas que no descuentan', () => {
+    expect(calc(null, null, 'Falta', 'LV', base({ horasSemanales: 24 })).contra).toBe(240);
+    expect(calc(null, null, 'Falta', 'LV', base({ descuenta: false }))).toMatchObject({ contra: 0, falta: true });
+    const seb = base({ horasSemanales: 24, salidaLV: h('12:00'), extrasDesdeLV: h('18:00'), descuenta: false });
+    expect(calc('08:31', '12:14', '', 'LV', seb)).toMatchObject({ favor: 0, contra: 0, pendiente: false });
+    expect(calc('08:31', '18:47', '', 'LV', seb).favor).toBe(47);
   });
 });

@@ -1,5 +1,5 @@
 import type { DayType } from './calendar';
-import type { Motivo, Persona, Reglas } from './config';
+import type { Persona, Reglas } from './config';
 import { fmtHHMM, type Min } from './time';
 
 const H11 = 11 * 60;
@@ -139,6 +139,8 @@ export interface DiaCalculo {
   trabajado: Min;
   favor: Min;
   contra: Min;
+  /** Horas canjeadas de la bolsa (motivo "Compensado"). */
+  compensado: Min;
   /** Parte de "favor" que es por trabajar en domingo/feriado. */
   enFeriado: Min;
   /** Falta un dato (celda amarilla). */
@@ -148,19 +150,32 @@ export interface DiaCalculo {
   falta: boolean;
 }
 
+/** Jornada de un día completo (para Falta, Estudio o Compensado sin marcadas). */
+export function jornada(p: Persona, tipo: DayType): Min {
+  const fin = tipo === 'SAB' ? p.salidaSab : p.salidaLV;
+  return Math.min(Math.round((p.horasSemanales * 60) / 6), fin - p.entrada);
+}
+
+/** Horas trabajadas de un día normal completo (Vacaciones / Salud). */
+export function diaCompleto(p: Persona, tipo: DayType, r: Reglas): Min {
+  const fin = tipo === 'SAB' ? p.salidaSab : p.salidaLV;
+  return fin - p.entrada - (tipo === 'LV' ? r.almuerzoMin : 0);
+}
+
 /**
  * Cálculo de referencia de un día. Es exactamente lo que hacen las fórmulas del Excel
  * (ver excel.ts); la prueba de coherencia compara ambos.
  */
-export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, motivos: Motivo[], aplica: boolean): DiaCalculo {
-  const z: DiaCalculo = { trabajado: 0, favor: 0, contra: 0, enFeriado: 0, pendiente: false, alerta: false, falta: false };
+export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, aplica: boolean): DiaCalculo {
+  const z: DiaCalculo = { trabajado: 0, favor: 0, contra: 0, compensado: 0, enFeriado: 0, pendiente: false, alerta: false, falta: false };
   if (!aplica) return z;
-  const m = motivos.find((x) => x.nombre.toLowerCase() === d.motivo.trim().toLowerCase());
+  const m = d.motivo.trim().toLowerCase();
   const e = d.entrada;
   const s = d.salida;
   const ambos = e != null && s != null;
+  const xor = (e == null) !== (s == null);
   z.alerta = ambos && s! <= e!;
-  z.falta = d.motivo.trim().toLowerCase() === 'falta';
+  z.falta = m === 'falta';
   const laborable = tipo === 'LV' || tipo === 'SAB';
 
   if (ambos && s! > e!) {
@@ -168,8 +183,7 @@ export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, m
     z.trabajado = bruto - (tipo === 'LV' && bruto > 300 ? r.almuerzoMin : 0);
   }
   if (!laborable) {
-    // Domingo/feriado: si solo hay una de las dos horas, falta un dato.
-    z.pendiente = (e == null) !== (s == null);
+    z.pendiente = xor;
     if (ambos && s! > e!) {
       z.favor = Math.round((s! - e!) * r.factorFeriado);
       z.enFeriado = z.favor;
@@ -177,18 +191,30 @@ export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, m
     return z;
   }
 
-  const sinAlgo = e == null || s == null;
-  z.pendiente = d.motivo.trim() === '' ? sinAlgo : !!m?.necesitaHoras && sinAlgo;
+  if (m === '') z.pendiente = e == null || s == null;
+  else if (m === 'compensado' || m === 'estudio') z.pendiente = xor;
+
+  if (m === 'vacaciones' || m === 'salud') {
+    z.trabajado = diaCompleto(p, tipo, r);
+    return z;
+  }
 
   const fin = tipo === 'SAB' ? p.salidaSab : p.salidaLV;
   const extrasDesde = tipo === 'SAB' ? p.salidaSab : p.extrasDesdeLV;
-  if (s != null && s >= extrasDesde + r.margenExtras) z.favor += s - extrasDesde;
-  if (e != null && p.tempranoAntesDe != null && e < p.tempranoAntesDe && e < p.entrada) z.favor += p.entrada - e;
+  if (m !== 'falta') {
+    if (s != null && s >= extrasDesde + r.margenExtras) z.favor += s - extrasDesde;
+    if (e != null && p.tempranoAntesDe != null && e < p.tempranoAntesDe && e < p.entrada) z.favor += p.entrada - e;
+  }
 
   if (p.descuenta) {
-    if (e != null && e > p.entrada && e - p.entrada >= r.tardanzaDesde) z.contra += e - p.entrada;
-    if (s != null && s < fin) z.contra += fin - s;
-    if (m?.restaJornada && e == null && s == null) z.contra += Math.min(Math.round((p.horasSemanales * 60) / 6), fin - p.entrada);
+    let faltan = 0;
+    if (e != null && e - p.entrada >= Math.max(r.tardanzaDesde, 1)) faltan += e - p.entrada;
+    if (s != null && s < fin) faltan += fin - s;
+    const sinMarcas = e == null && s == null;
+    if (m === 'falta') z.contra = jornada(p, tipo);
+    else if (m === 'compensado') z.compensado = sinMarcas ? jornada(p, tipo) : faltan;
+    else if (m === 'estudio') z.contra = sinMarcas ? jornada(p, tipo) : faltan;
+    else z.contra = faltan;
   }
   return z;
 }

@@ -1,8 +1,7 @@
 import { useRef, useState } from 'react';
 import { feriadosPeru } from '../lib/calendar';
 import { normalizarConfig, type Config, type Persona } from '../lib/config';
-import { leerSaldosDeExcel } from '../lib/saldos';
-import { fmtDur, fmtHHMM, parseHHMM } from '../lib/time';
+import { fmtHHMM, parseHHMM } from '../lib/time';
 import { Caja } from './Procesar';
 
 interface Props {
@@ -16,7 +15,6 @@ export function Personas({ config, setConfig, errores }: Props) {
   const [nuevoFer, setNuevoFer] = useState({ fecha: '', nombre: '' });
   const [verInactivas, setVerInactivas] = useState(false);
   const inJson = useRef<HTMLInputElement>(null);
-  const inXlsx = useRef<HTMLInputElement>(null);
 
   const setP = (id: string, cambio: Partial<Persona>) => setConfig({ ...config, personas: config.personas.map((p) => (p.id === id ? { ...p, ...cambio } : p)) });
   const r = config.reglas;
@@ -39,27 +37,6 @@ export function Personas({ config, setConfig, errores }: Props) {
       setMsg({ tipo: 'ok', txt: 'Respaldo cargado.' });
     } catch (e) {
       setMsg({ tipo: 'error', txt: `No se pudo leer el respaldo: ${e instanceof Error ? e.message : e}` });
-    }
-  }
-
-  async function importarSaldos(f: File) {
-    try {
-      const saldos = leerSaldosDeExcel(new Uint8Array(await f.arrayBuffer()));
-      const porAlias = new Map(config.personas.map((p) => [p.alias.toUpperCase(), p]));
-      const cambios = saldos.filter((s) => porAlias.has(s.alias.toUpperCase()));
-      const sinPersona = saldos.filter((s) => !porAlias.has(s.alias.toUpperCase())).map((s) => s.alias);
-      const lista = cambios.map((s) => `${s.alias}: ${s.minutos >= 0 ? `le debemos ${fmtDur(s.minutos)}` : `nos debe ${fmtDur(-s.minutos)}`}`).join('\n');
-      if (!window.confirm(`Se usarán estos saldos finales como "saldo anterior" del próximo mes:\n\n${lista}${sinPersona.length ? `\n\nNo encontré a: ${sinPersona.join(', ')}` : ''}\n\n¿Continuar?`)) return;
-      setConfig({
-        ...config,
-        personas: config.personas.map((p) => {
-          const s = cambios.find((x) => x.alias.toUpperCase() === p.alias.toUpperCase());
-          return s ? { ...p, saldoAnterior: s.minutos } : p;
-        }),
-      });
-      setMsg({ tipo: 'ok', txt: `Saldos actualizados para ${cambios.length} personas.` });
-    } catch (e) {
-      setMsg({ tipo: 'error', txt: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -99,7 +76,7 @@ export function Personas({ config, setConfig, errores }: Props) {
             <table className="text-sm">
               <thead>
                 <tr className="bg-qalen text-left text-xs text-white">
-                  {['Activa', 'Nombre corto', 'Nombre en el reloj', 'Empresa', 'Horas / semana', 'Entrada', 'Salida L-V', 'Salida sáb.', 'Extras desde (L-V)', 'Llegar temprano cuenta si llega antes de', 'Descuenta tardanzas y salidas', 'Reparto', 'Fecha de ingreso', 'Saldo anterior'].map((t) => (
+                  {['Activa', 'Nombre corto', 'Nombre en el reloj', 'Empresa', 'Horas / semana', 'Entrada', 'Salida L-V', 'Salida sáb.', 'Extras desde (L-V)', 'Llegar temprano cuenta si llega antes de', 'Descuenta tardanzas y salidas', 'Reparto', 'Fecha de ingreso'].map((t) => (
                     <th key={t} className="p-2 align-bottom">{t}</th>
                   ))}
                 </tr>
@@ -120,7 +97,6 @@ export function Personas({ config, setConfig, errores }: Props) {
                     <td className="p-1 text-center"><input type="checkbox" checked={p.descuenta} onChange={(e) => setP(p.id, { descuenta: e.target.checked })} /></td>
                     <td className="p-1 text-center"><input type="checkbox" checked={p.reparto} onChange={(e) => setP(p.id, { reparto: e.target.checked })} /></td>
                     <td className="p-1"><input type="date" value={p.fechaIngreso ?? ''} onChange={(e) => setP(p.id, { fechaIngreso: e.target.value || null })} /></td>
-                    <td className="p-1"><Saldo key={p.saldoAnterior} v={p.saldoAnterior} on={(v) => setP(p.id, { saldoAnterior: v })} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -188,14 +164,8 @@ export function Personas({ config, setConfig, errores }: Props) {
       </section>
 
       <section className="rounded-xl bg-white p-5 shadow-sm">
-        <h2 className="text-lg font-bold">Saldos y respaldo</h2>
+        <h2 className="text-lg font-bold">Respaldo</h2>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
-          <div>
-            <p className="text-sm font-semibold">Pasar los saldos al mes siguiente</p>
-            <p className="text-xs text-stone-500">Elige el Excel del mes que ya terminaste (guardado en Excel). Sus saldos finales quedan como “saldo anterior”.</p>
-            <button className="mt-2 rounded bg-qalen px-3 py-2 text-sm font-semibold text-white" onClick={() => inXlsx.current?.click()}>Leer saldos de un Excel terminado</button>
-            <input ref={inXlsx} type="file" accept=".xlsx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importarSaldos(f); e.target.value = ''; }} />
-          </div>
           <div>
             <p className="text-sm font-semibold">Respaldo de la configuración</p>
             <p className="text-xs text-stone-500">La configuración se guarda en este navegador. Descarga un respaldo de vez en cuando, o para pasarla a otra computadora.</p>
@@ -216,35 +186,6 @@ function Hora({ v, on, vacio }: { v: number | null; on: (v: number | null) => vo
     <td className="p-1">
       <input type="time" value={fmtHHMM(v)} required={!vacio} onChange={(e) => on(e.target.value ? parseHHMM(e.target.value) : vacio ? null : v)} />
     </td>
-  );
-}
-
-function Saldo({ v, on }: { v: number; on: (v: number) => void }) {
-  const abs = Math.abs(v);
-  const signo = v < 0 ? -1 : 1;
-  const [txt, setTxt] = useState(fmtDur(abs));
-  return (
-    <div className="flex items-center gap-1">
-      <input
-        type="text"
-        className="w-16 text-right font-mono"
-        value={txt}
-        onChange={(e) => setTxt(e.target.value)}
-        onBlur={() => {
-          const m = /^(\d{1,4}):([0-5]\d)$/.exec(txt.trim());
-          if (!m) {
-            setTxt(fmtDur(abs));
-            return;
-          }
-          on(signo * (Number(m[1]) * 60 + Number(m[2])));
-        }}
-        title="Horas:minutos, por ejemplo 15:07"
-      />
-      <select value={signo} onChange={(e) => on(Number(e.target.value) * abs)}>
-        <option value={1}>le debemos</option>
-        <option value={-1}>nos debe</option>
-      </select>
-    </div>
   );
 }
 

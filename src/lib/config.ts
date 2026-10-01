@@ -24,17 +24,16 @@ export interface Persona {
   descuenta: boolean;
   /** Días anteriores no se cuentan (persona nueva). */
   fechaIngreso: ISODate | null;
-  /** Saldo de la bolsa de horas al iniciar el mes, en minutos. Positivo = le debemos; negativo = nos debe. */
-  saldoAnterior: Min;
 }
 
-export interface Motivo {
-  nombre: string;
-  /** Si no hay marcadas ese día, se le resta la jornada de la bolsa. */
-  restaJornada: boolean;
-  /** Con este motivo igual hay que escribir entrada y salida (p. ej. avisó la salida por WhatsApp). */
-  necesitaHoras: boolean;
-}
+/**
+ * Motivos de la fila "Motivo" (lista cerrada):
+ *  - Vacaciones / Salud: se considera que trabajó el día completo.
+ *  - Compensado: canjea horas a favor; lo que falte del día va a "Compensadas" (no a "En contra").
+ *  - Estudio: lo que falte del día (o la jornada completa si no marcó) es hora en contra.
+ *  - Falta: la jornada completa es hora en contra y se cuenta como falta.
+ */
+export const MOTIVOS = ['Vacaciones', 'Salud', 'Compensado', 'Estudio', 'Falta'] as const;
 
 export interface Reglas {
   /** Las extras solo cuentan si sale este número de minutos o más después de su hora (18:20 → 20). */
@@ -47,34 +46,20 @@ export interface Reglas {
 }
 
 export interface Config {
-  version: 1;
+  version: 2;
   empresaNombre: string;
   personas: Persona[];
-  motivos: Motivo[];
   reglas: Reglas;
   feriados: { fecha: ISODate; nombre: string }[];
 }
 
-export const MOTIVOS_BASE: Motivo[] = [
-  { nombre: 'WhatsApp', restaJornada: false, necesitaHoras: true },
-  { nombre: 'Comisión / reparto', restaJornada: false, necesitaHoras: true },
-  { nombre: 'Permiso', restaJornada: true, necesitaHoras: false },
-  { nombre: 'Estudia', restaJornada: true, necesitaHoras: false },
-  { nombre: 'Falta', restaJornada: false, necesitaHoras: false },
-  { nombre: 'Vacaciones', restaJornada: false, necesitaHoras: false },
-  { nombre: 'Descanso médico', restaJornada: false, necesitaHoras: false },
-  { nombre: 'Descanso', restaJornada: false, necesitaHoras: false },
-  { nombre: 'Feriado', restaJornada: false, necesitaHoras: false },
-  { nombre: 'Otro', restaJornada: false, necesitaHoras: false },
-];
 
 export function configInicial(anio = new Date().getFullYear()): Config {
   return {
-    version: 1,
+    version: 2,
     empresaNombre: 'QALEN',
     personas: [],
-    motivos: MOTIVOS_BASE.map((m) => ({ ...m })),
-    reglas: { margenExtras: 20, almuerzoMin: 45, tardanzaDesde: 60, factorFeriado: 1 },
+    reglas: { margenExtras: 20, almuerzoMin: 45, tardanzaDesde: 0, factorFeriado: 1 },
     feriados: [...feriadosPeru(anio), ...feriadosPeru(anio + 1)],
   };
 }
@@ -96,10 +81,9 @@ export function personaNueva(r: Pick<RelojPersona, 'id' | 'nombre'>, aliasUsados
     salidaLV: 18 * 60,
     salidaSab: 12 * 60,
     extrasDesdeLV: 18 * 60,
-    tempranoAntesDe: null,
+    tempranoAntesDe: 8 * 60,
     descuenta: true,
     fechaIngreso: null,
-    saldoAnterior: 0,
   };
 }
 
@@ -148,12 +132,17 @@ export function normalizarConfig(x: unknown): Config {
   const o = x as Partial<Config>;
   if (!Array.isArray(o.personas)) throw new Error('El respaldo no tiene la lista de personas.');
   const plantilla = personaNueva({ id: '0', nombre: 'X' }, new Set(), true);
+  // Versión 1 → 2: toda tardanza resta y llegar antes de las 08:00 suma para todos.
+  const v1 = (o as { version?: number }).version !== 2;
   return {
-    version: 1,
+    version: 2,
     empresaNombre: o.empresaNombre ?? base.empresaNombre,
-    personas: o.personas.map((p) => ({ ...plantilla, ...p, id: String(p.id) })),
-    motivos: Array.isArray(o.motivos) && o.motivos.length ? o.motivos : base.motivos,
-    reglas: { ...base.reglas, ...(o.reglas ?? {}) },
+    personas: o.personas.map((p) => {
+      const { saldoAnterior: _s, ...resto } = p as Persona & { saldoAnterior?: number };
+      void _s;
+      return { ...plantilla, ...resto, id: String(p.id), ...(v1 ? { tempranoAntesDe: plantilla.tempranoAntesDe } : {}) };
+    }),
+    reglas: { ...base.reglas, ...(o.reglas ?? {}), ...(v1 ? { tardanzaDesde: 0 } : {}) },
     feriados: Array.isArray(o.feriados) ? o.feriados : base.feriados,
   };
 }

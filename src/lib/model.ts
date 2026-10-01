@@ -20,7 +20,7 @@ export interface Dia {
 export interface FilaPersona {
   persona: Persona;
   dias: Dia[];
-  tot: { trabajado: Min; favor: Min; contra: Min; enFeriado: Min; pendientes: number; faltas: number; dias: number; saldoFinal: Min };
+  tot: { trabajado: Min; base: Min; favor: Min; contra: Min; compensado: Min; enFeriado: Min; pendientes: number; faltas: number; dias: number; saldo: Min };
 }
 
 export interface Mes {
@@ -88,7 +88,7 @@ export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
       // Antes de la fecha de ingreso no se cuenta nada: las marcadas quedan solo como referencia.
       const entrada = aplica ? clas.entrada : null;
       const salida = aplica ? clas.salida : null;
-      const calc = calcularDia({ entrada, salida, motivo: '' }, tipo, p, cfg.reglas, cfg.motivos, aplica);
+      const calc = calcularDia({ entrada, salida, motivo: '' }, tipo, p, cfg.reglas, aplica);
       const casos = [...clas.casos];
       if (calc.favor - calc.enFeriado > 180) casos.push({ tipo: 'extras_altas', faltaDato: false, mensaje: `Más de 3 horas a favor en el día (${Math.floor(calc.favor / 60)} h ${calc.favor % 60} min). Solo para revisar.` });
       return { fecha, tipo, aplica, reloj: clas.marcas.map(fmtHHMM).join(' '), clas, entrada, salida, motivo: '', calc, casos };
@@ -102,9 +102,11 @@ export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
 }
 
 export function totales(p: Persona, dias: Dia[]): FilaPersona['tot'] {
-  const t = { trabajado: 0, favor: 0, contra: 0, enFeriado: 0, pendientes: 0, faltas: 0, dias: 0, saldoFinal: 0 };
+  const t = { trabajado: 0, base: 0, favor: 0, contra: 0, compensado: 0, enFeriado: 0, pendientes: 0, faltas: 0, dias: 0, saldo: 0 };
   for (const d of dias) {
     t.trabajado += d.calc.trabajado;
+    t.compensado += d.calc.compensado;
+    if (d.aplica && (d.tipo === 'LV' || d.tipo === 'SAB')) t.base += baseDiaria(p);
     t.favor += d.calc.favor;
     t.contra += d.calc.contra;
     t.enFeriado += d.calc.enFeriado;
@@ -112,8 +114,13 @@ export function totales(p: Persona, dias: Dia[]): FilaPersona['tot'] {
     if (d.calc.falta) t.faltas++;
     if (d.aplica && d.entrada != null) t.dias++;
   }
-  t.saldoFinal = p.saldoAnterior + t.favor - t.contra;
+  t.saldo = t.favor - t.contra - t.compensado;
   return t;
+}
+
+/** Horas base por día laborable (lunes a sábado): horas semanales ÷ 6. */
+export function baseDiaria(p: Persona): Min {
+  return Math.round((p.horasSemanales * 60) / 6);
 }
 
 export interface CasoListado {
