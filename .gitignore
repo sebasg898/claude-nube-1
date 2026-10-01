@@ -1,0 +1,6 @@
+# Archivos de ejemplo con datos personales: nunca al repo
+/samples/
+*.xls
+*.xlsx
+node_modules/
+dist/
