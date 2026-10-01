@@ -1,0 +1,45 @@
+import { describe, expect, it } from 'vitest';
+import { corteSugerido, dayType, feriadosPeru, ultimoDiaHabil } from '../src/lib/calendar';
+import { ErrorReporte, interpretarFilas, leerReporte } from '../src/lib/parser';
+import { reporteSintetico } from './sintetico';
+
+describe('lectura del reporte', () => {
+  it('separa las horas pegadas y respeta las columnas', () => {
+    const rep = leerReporte(reporteSintetico([{ id: '90000001', nombre: 'ana prueba', dias: { 1: '08:2913:4114:1218:01', 3: '08:25' } }]));
+    expect(rep.inicio).toBe('2026-09-01');
+    expect(rep.fechas).toHaveLength(12);
+    const p = rep.personas[0];
+    expect(p.id).toBe('90000001');
+    expect(p.marcadas['2026-09-01']).toEqual([509, 821, 852, 1081]);
+    expect(p.marcadas['2026-09-02']).toBeUndefined();
+    expect(p.marcadas['2026-09-03']).toEqual([505]);
+  });
+
+  it('período que cruza de mes', () => {
+    const filas = [['Periodo:', '2026-09-28 ~ 2026-10-02'], [28, 29, 30, 1, 2], ['ID:', '5', 'Nombre:', 'A'], ['', '', '', '08:00', '']];
+    const rep = interpretarFilas(filas);
+    expect(rep.fechas).toEqual(['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02']);
+    expect(rep.personas[0].marcadas['2026-10-01']).toEqual([480]);
+  });
+
+  it('errores claros si no es el archivo correcto', () => {
+    expect(() => interpretarFilas([['hola']])).toThrow(ErrorReporte);
+    expect(() => leerReporte(new Uint8Array([1, 2, 3]))).toThrow(/reporte|abrir|hoja/i);
+  });
+});
+
+describe('calendario', () => {
+  const fer = new Set(feriadosPeru(2026).map((f) => f.fecha));
+  it('feriados móviles 2026 y tipos de día', () => {
+    expect(fer.has('2026-04-02') && fer.has('2026-04-03')).toBe(true);
+    expect(dayType('2026-09-05', fer)).toBe('SAB');
+    expect(dayType('2026-09-06', fer)).toBe('DOM');
+    expect(dayType('2026-10-08', fer)).toBe('FER');
+  });
+  it('corte: último día hábil, o fin del reporte si llega antes', () => {
+    expect(ultimoDiaHabil('2026-09-01', fer)).toBe('2026-09-30');
+    expect(ultimoDiaHabil('2026-10-01', fer)).toBe('2026-10-30');
+    expect(corteSugerido('2026-09-01', '2026-09-26', fer)).toBe('2026-09-26');
+    expect(corteSugerido('2026-09-01', '2026-10-02', fer)).toBe('2026-09-30');
+  });
+});

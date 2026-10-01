@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@theme {
+  --color-qalen: #c8102e;
+  --color-qalen-dark: #9e0c24;
+  --color-qalen-soft: #fbe3e6;
+}
+
+body { @apply bg-stone-100 text-stone-800 antialiased; }
+input[type="time"], input[type="date"], input[type="number"], input[type="text"], select {
+  @apply rounded border border-stone-300 bg-white px-2 py-1 text-sm focus:border-qalen focus:outline-none focus:ring-1 focus:ring-qalen;
+}
