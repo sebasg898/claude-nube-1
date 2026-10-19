@@ -47,7 +47,7 @@ export default function App() {
           <img src={logoUrl} alt="QALEN · Química Allende S.A.C." className="h-12 w-auto" />
           <div className="mr-auto">
             <h1 className="text-xl font-bold text-qalen">Control de asistencia</h1>
-            <p className="text-xs text-stone-500">Bolsa de horas desde el reporte del reloj</p>
+            <p className="text-xs text-stone-500">Horas extras y asistencia desde el reporte del reloj</p>
           </div>
           <nav className="flex gap-1 rounded-lg bg-stone-100 p-1">
             {([['procesar', 'Procesar mes'], ['personas', 'Personas y reglas']] as const).map(([k, t]) => (

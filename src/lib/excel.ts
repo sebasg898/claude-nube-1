@@ -7,15 +7,16 @@
  *    elige un motivo, se recalculan solos los totales, la hoja Semanal y el Resumen.
  *
  * Los parámetros de cada persona (horario, etc.) van como valores en columnas ocultas de
- * la hoja Asistencia; no hay hoja de configuración que ella tenga que tocar.
- * Las fórmulas replican exactamente calcularDia() de rules.ts (hay una prueba que lo verifica
- * recalculando el archivo con LibreOffice).
+ * la hoja Asistencia; no hay hoja de configuración que ella tenga que tocar. El valor hora
+ * está a la vista en el Resumen y se puede corregir ahí.
+ * Las fórmulas replican exactamente calcularDia(), descontarCompensadas() y montoSoles()
+ * (hay una prueba que lo verifica recalculando el archivo con LibreOffice).
  */
 import ExcelJS from 'exceljs';
 import { MOTIVOS, type Config } from './config';
 import { baseDiaria, type Mes } from './model';
 import type { Reporte } from './parser';
-import { DIAS_CORTO, MESES, ddmm, excelSerial, fmtDur, fmtHHMM, parseISO, weekday } from './time';
+import { DIAS_CORTO, MESES, ddmm, excelSerial, fmtHHMM, parseISO, weekday } from './time';
 
 // ---------- estilo ----------
 const ROJO = 'FFC8102E';
@@ -30,13 +31,16 @@ const NARANJA_SALIDA = 'FFFCE4D6';
 const ROSA = 'FFFFC7CE';
 const MORADO = 'FF7030A0';
 const VERDE_TXT = 'FF375623';
+const VERDE_OSC = 'FF1E5631';
 const ROJO_TXT = 'FF9C0006';
+const AZUL_FER = 'FF1F4E79';
 
 const fill = (argb: string): ExcelJS.Fill => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
 const cfFill = (argb: string): ExcelJS.Fill => ({ type: 'pattern', pattern: 'solid', bgColor: { argb } });
 const thin: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: 'FFBFBFBF' } };
 const grueso: Partial<ExcelJS.Border> = { style: 'medium', color: { argb: 'FF595959' } };
 const bordes: Partial<ExcelJS.Borders> = { top: thin, left: thin, bottom: thin, right: thin };
+const SOLES = '"S/ "#,##0.00';
 
 export function col(n: number): string {
   let s = '';
@@ -51,12 +55,16 @@ export function col(n: number): string {
 // ---------- disposición ----------
 export const HOJAS = { leeme: 'Leeme', asis: 'Asistencia', semanal: 'Semanal', resumen: 'Resumen' } as const;
 
-/** Filas dentro del bloque de cada persona en la hoja Asistencia. */
-export const FILA = { reloj: 0, entrada: 1, salida: 2, motivo: 3, trabajado: 4, favor: 5, contra: 6, compensado: 7 } as const;
-export const ALTO_BLOQUE = 8;
+/** Filas dentro del bloque de cada persona en la hoja Asistencia (neto1/neto2 van ocultas). */
+export const FILA = {
+  reloj: 0, entrada: 1, salida: 2, motivo: 3, trabajado: 4, extra1: 5, extra2: 6, feriado: 7, contra: 8, compensado: 9, neto1: 10, neto2: 11,
+} as const;
+type Fila = keyof typeof FILA;
+export const ALTO_BLOQUE = 12;
 export const PRIMERA_FILA_BLOQUE = 10;
 export const PRIMERA_COL_DIA = 3; // C
 const R_DIASEM = 5, R_FECHA = 6, R_TIPO = 7, R_SEMANA = 8;
+const OCULTAS: Fila[] = ['neto1', 'neto2'];
 
 export function filaBloque(i: number): number {
   return PRIMERA_FILA_BLOQUE + i * ALTO_BLOQUE;
@@ -65,12 +73,11 @@ export function filaBloque(i: number): number {
 /** Columnas del Resumen. */
 export const RES = {
   primeraFila: 6,
-  nombre: 2, empresa: 3, faltas: 4, trabajado: 5, base: 6, favor: 7, contra: 8, compensado: 9, saldo: 10, pendientes: 11,
+  nombre: 2, empresa: 3, faltas: 4, trabajado: 5, base: 6,
+  extra1: 7, extra2: 8, compensado: 9,
+  neto1: 10, neto2: 11, feriado: 12, valorHora: 13, monto: 14,
+  nosDebe: 15, contra: 16, pendientes: 17,
 } as const;
-
-const ETIQUETAS: Record<keyof typeof FILA, string> = {
-  reloj: 'Reloj', entrada: 'Entrada', salida: 'Salida', motivo: 'Motivo / Obs.', trabajado: 'Horas trabajadas', favor: 'A favor', contra: 'En contra', compensado: 'Compensadas',
-};
 
 export interface OpcionesExcel {
   logoBase64?: string; // sin el prefijo data:
@@ -90,7 +97,17 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
   const titulo = `${MESES[mo]} ${y}`;
   const periodo = `del ${ddmm(mes.inicio)} al ${ddmm(mes.hasta)}`;
   const R = cfg.reglas;
-  const MARG = R.margenExtras, ALM = R.almuerzoMin, TD1 = Math.max(R.tardanzaDesde, 1), FACT = R.factorFeriado;
+  const MARG = R.margenExtras, ALM = R.almuerzoMin, TD1 = Math.max(R.tardanzaDesde, 1), TRAMO = R.tramo1Min;
+  const pct = (f: number) => `${Math.round((f - 1) * 100)}%`;
+  const P1 = pct(R.recargo1), P2 = pct(R.recargo2), PF = pct(R.recargoFeriado);
+  const horasTramo = TRAMO % 60 ? `${TRAMO} min` : `${TRAMO / 60} horas`;
+
+  const ETIQUETAS: Record<Fila, string> = {
+    reloj: 'Reloj', entrada: 'Entrada', salida: 'Salida', motivo: 'Motivo / Obs.', trabajado: 'Horas trabajadas',
+    extra1: `Extra ${P1}`, extra2: `Extra ${P2}`, feriado: 'Dom./Feriado', contra: 'En contra', compensado: 'Compensadas',
+    neto1: `Extra ${P1} a pagar`, neto2: `Extra ${P2} a pagar`,
+  };
+  const COLOR_TXT: Partial<Record<Fila, string>> = { extra1: VERDE_TXT, extra2: VERDE_OSC, feriado: AZUL_FER, contra: ROJO_TXT, compensado: MORADO, neto1: VERDE_TXT, neto2: VERDE_OSC };
 
   const leeme = wb.addWorksheet(HOJAS.leeme, { properties: { tabColor: { argb: GRIS_OSC } } });
   const asis = wb.addWorksheet(HOJAS.asis, { properties: { tabColor: { argb: ROJO } } });
@@ -183,7 +200,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
     mes.filas.forEach((fp, i) => {
       const r0 = filaBloque(i);
       const p = fp.persona;
-      const RF = (k: keyof typeof FILA) => r0 + FILA[k];
+      const RF = (k: Fila) => r0 + FILA[k];
       ws.mergeCells(r0, 1, r0 + ALTO_BLOQUE - 1, 1);
       const nc = ws.getCell(r0, 1);
       nc.value = p.alias;
@@ -191,20 +208,17 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       nc.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
       nc.fill = fill(GRIS);
 
-      const colorFila = (k: keyof typeof FILA) => (k === 'entrada' ? VERDE_ENTRADA : k === 'salida' ? NARANJA_SALIDA : k === 'motivo' ? 'FFFFFFFF' : GRIS);
-      for (const k of Object.keys(FILA) as (keyof typeof FILA)[]) {
+      const colorFila = (k: Fila) => (k === 'entrada' ? VERDE_ENTRADA : k === 'salida' ? NARANJA_SALIDA : k === 'motivo' ? 'FFFFFFFF' : GRIS);
+      for (const k of Object.keys(FILA) as Fila[]) {
         for (const c of [2, cEtq2]) {
           const cell = ws.getCell(RF(k), c);
           cell.value = ETIQUETAS[k];
-          cell.font = {
-            bold: k !== 'reloj' && k !== 'trabajado',
-            size: 9,
-            color: { argb: k === 'favor' ? VERDE_TXT : k === 'contra' ? ROJO_TXT : k === 'compensado' ? MORADO : 'FF000000' },
-          };
+          cell.font = { bold: k !== 'reloj' && k !== 'trabajado', size: 9, color: { argb: COLOR_TXT[k] ?? 'FF000000' } };
           cell.fill = fill(colorFila(k));
         }
       }
       ws.getRow(RF('reloj')).height = 24;
+      for (const k of OCULTAS) ws.getRow(RF(k)).hidden = true;
 
       // Parámetros de la persona (valores fijos, columnas ocultas)
       const pars: [number, number][] = [
@@ -215,6 +229,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       for (const [c, v] of pars) ws.getCell(r0, c).value = v;
       const P = (c: number) => `$${L(c)}$${r0}`;
       const IN = P(PAR.ent), OLV = P(PAR.sLV), OSAB = P(PAR.sSab), XLV = P(PAR.xLV), TEMP = P(PAR.temp), DESC = P(PAR.desc), JOR = P(PAR.jor), ING = P(PAR.ing);
+      const COMP_TOT = `ROUND(SUM(${rangoFila(RF('compensado'))})*1440,0)`;
 
       fp.dias.forEach((d, j) => {
         const c = cDia(j);
@@ -229,6 +244,11 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
         const LAB = `OR(${T}="LV",${T}="SAB")`;
         const SINM = `AND(NOT(ISNUMBER(${E})),NOT(ISNUMBER(${S})))`;
         const FALTAN = `IF(ISNUMBER(${E}),IF(${e}-${IN}>=${TD1},${e}-${IN},0),0)+IF(ISNUMBER(${S}),IF(${s}<${FIN},${FIN}-${s},0),0)`;
+        // Minutos extra del día (lunes a sábado)
+        const EXT =
+          `IF(${F}<${ING},0,IF(${LAB},IF(OR(${PAG},${M}="Falta"),0,` +
+          `IF(ISNUMBER(${S}),IF(${s}>=${XD}+${MARG},${s}-${XD},0),0)` +
+          `+IF(ISNUMBER(${E}),IF(AND(${TEMP}>0,${e}<${TEMP},${e}<${IN}),${IN}-${e},0),0)),0))`;
 
         const cr = ws.getCell(RF('reloj'), c);
         cr.value = d.reloj || null;
@@ -260,46 +280,56 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
         cm.alignment = { horizontal: 'center', shrinkToFit: true };
 
         const trab = `IF(${F}<${ING},0,IF(AND(${LAB},${PAG}),${FIN}-${IN}-IF(${T}="LV",${ALM},0),IF(ISNUMBER(${E}),IF(ISNUMBER(${S}),IF(${s}>${e},${s}-${e}-IF(AND(${T}="LV",${s}-${e}>300),${ALM},0),0),0),0)))/1440`;
-        const favor =
-          `IF(${F}<${ING},0,IF(${LAB},IF(OR(${PAG},${M}="Falta"),0,` +
-          `IF(ISNUMBER(${S}),IF(${s}>=${XD}+${MARG},${s}-${XD},0),0)` +
-          `+IF(ISNUMBER(${E}),IF(AND(${TEMP}>0,${e}<${TEMP},${e}<${IN}),${IN}-${e},0),0)),` +
-          `IF(ISNUMBER(${E}),IF(ISNUMBER(${S}),IF(${s}>${e},ROUND((${s}-${e})*${FACT},0),0),0),0)))/1440`;
+        const ext1 = `MIN(${EXT},${TRAMO})/1440`;
+        const ext2 = `MAX(${EXT}-${TRAMO},0)/1440`;
+        const fer = `IF(${F}<${ING},0,IF(${LAB},0,IF(ISNUMBER(${E}),IF(ISNUMBER(${S}),IF(${s}>${e},${s}-${e},0),0),0)))/1440`;
         const contra =
           `IF(OR(${F}<${ING},NOT(${LAB}),${DESC}=0,${PAG},${M}="Compensado"),0,` +
           `IF(${M}="Falta",${JORD},IF(AND(${M}="Estudio",${SINM}),${JORD},${FALTAN})))/1440`;
         const comp = `IF(OR(${F}<${ING},NOT(${LAB}),${DESC}=0),0,IF(${M}="Compensado",IF(${SINM},${JORD},${FALTAN}),0))/1440`;
+        // Compensadas que quedan por descontar al empezar este día (se descuentan desde el primer día)
+        const ANT = j === 0 ? '0' : `ROUND((SUM($${X0}${RF('extra1')}:${L(c - 1)}${RF('extra1')})+SUM($${X0}${RF('extra2')}:${L(c - 1)}${RF('extra2')}))*1440,0)`;
+        const RESTO = `MAX(${COMP_TOT}-${ANT},0)`;
+        const E1 = `ROUND(${X}${RF('extra1')}*1440,0)`, E2 = `ROUND(${X}${RF('extra2')}*1440,0)`;
+        const net2 = `(${E2}-MIN(${E2},${RESTO}))/1440`;
+        const net1 = `(${E1}-MIN(${E1},MAX(${RESTO}-${E2},0)))/1440`;
 
-        const filas: [keyof typeof FILA, string, number, string][] = [
-          ['trabajado', trab, d.calc.trabajado, 'FF000000'],
-          ['favor', favor, d.calc.favor, VERDE_TXT],
-          ['contra', contra, d.calc.contra, ROJO_TXT],
-          ['compensado', comp, d.calc.compensado, MORADO],
+        const filas: [Fila, string, number][] = [
+          ['trabajado', trab, d.calc.trabajado],
+          ['extra1', ext1, d.calc.extra1],
+          ['extra2', ext2, d.calc.extra2],
+          ['feriado', fer, d.calc.enFeriado],
+          ['contra', contra, d.calc.contra],
+          ['compensado', comp, d.calc.compensado],
+          ['neto1', net1, d.neto.neto1],
+          ['neto2', net2, d.neto.neto2],
         ];
-        for (const [k, f, res, color] of filas) {
+        for (const [k, f, res] of filas) {
           const cell = ws.getCell(RF(k), c);
           cell.value = { formula: f, result: res / 1440 };
           cell.numFmt = '[h]:mm;;""';
           cell.fill = fill(GRIS);
           cell.alignment = { horizontal: 'center' };
-          cell.font = { size: 9, bold: k !== 'trabajado', color: { argb: color } };
+          cell.font = { size: 9, bold: k !== 'trabajado', color: { argb: COLOR_TXT[k] ?? 'FF000000' } };
         }
       });
 
       // Totales de la fila
-      const tot = (k: keyof typeof FILA, f: string, res: number, fmt: string, color = 'FF000000') => {
+      const tot = (k: Fila, f: string, res: number, fmt: string) => {
         const c = ws.getCell(RF(k), cTot);
         c.value = { formula: f, result: res };
         c.numFmt = fmt;
-        c.font = { bold: true, color: { argb: color } };
+        c.font = { bold: true, color: { argb: COLOR_TXT[k] ?? (k === 'motivo' ? ROJO_TXT : 'FF000000') } };
         c.alignment = { horizontal: 'center' };
         c.border = bordes;
         c.fill = fill(GRIS);
       };
-      tot('trabajado', `SUM(${rangoFila(RF('trabajado'))})`, fp.tot.trabajado / 1440, '[h]:mm');
-      tot('favor', `SUM(${rangoFila(RF('favor'))})`, fp.tot.favor / 1440, '[h]:mm', VERDE_TXT);
-      tot('contra', `SUM(${rangoFila(RF('contra'))})`, fp.tot.contra / 1440, '[h]:mm', ROJO_TXT);
-      tot('compensado', `SUM(${rangoFila(RF('compensado'))})`, fp.tot.compensado / 1440, '[h]:mm', MORADO);
+      const T = fp.tot;
+      const totales: [Fila, number][] = [
+        ['trabajado', T.trabajado], ['extra1', T.extra1], ['extra2', T.extra2], ['feriado', T.enFeriado],
+        ['contra', T.contra], ['compensado', T.compensado], ['neto1', T.neto1], ['neto2', T.neto2],
+      ];
+      for (const [k, v] of totales) tot(k, `SUM(${rangoFila(RF(k))})`, v / 1440, '[h]:mm');
       // Datos por completar (conteo de celdas amarillas)
       const Er = rangoFila(RF('entrada')), Sr = rangoFila(RF('salida')), Mr = rangoFila(RF('motivo'));
       const Tr = rangoFila(R_TIPO), Fr = rangoFila(R_FECHA);
@@ -307,16 +337,15 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       tot(
         'motivo',
         `SUMPRODUCT((${Fr}>=${ING})*(((${Tr}="LV")+(${Tr}="SAB"))*((${Mr}="")*(1-ISNUMBER(${Er})*ISNUMBER(${Sr}))+((${Mr}="Compensado")+(${Mr}="Estudio"))*${xorR})+((${Tr}="DOM")+(${Tr}="FER"))*${xorR}))`,
-        fp.tot.pendientes,
+        T.pendientes,
         '"Faltan "0;;"✔"',
-        ROJO_TXT,
       );
 
       // Formatos condicionales del bloque
       const Ex = `${X0}${RF('entrada')}`, Sx = `${X0}${RF('salida')}`, Mx = `${X0}${RF('motivo')}`;
       const Tx = `${X0}$${R_TIPO}`, Fx = `${X0}$${R_FECHA}`;
       const PEND = `AND(${Fx}>=${ING},IF(OR(${Tx}="LV",${Tx}="SAB"),IF(${Mx}="",NOT(AND(ISNUMBER(${Ex}),ISNUMBER(${Sx}))),AND(OR(${Mx}="Compensado",${Mx}="Estudio"),ISNUMBER(${Ex})<>ISNUMBER(${Sx}))),ISNUMBER(${Ex})<>ISNUMBER(${Sx})))`;
-      const rango = (k: keyof typeof FILA) => `${X0}${RF(k)}:${L(cUlt)}${RF(k)}`;
+      const rango = (k: Fila) => `${X0}${RF(k)}:${L(cUlt)}${RF(k)}`;
       for (const k of ['entrada', 'salida'] as const) {
         const ref = k === 'entrada' ? Ex : Sx;
         ws.addConditionalFormatting({
@@ -325,7 +354,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
             { type: 'expression', priority: 1, formulae: [`${Fx}<${ING}`], style: { fill: cfFill('FFD9D9D9'), font: { color: { argb: GRIS_OSC } } } },
             { type: 'expression', priority: 2, formulae: [`AND(ISNUMBER(${Ex}),ISNUMBER(${Sx}),${Sx}<=${Ex})`], style: { fill: cfFill('FFFF7C80'), font: { bold: true } } },
             { type: 'expression', priority: 3, formulae: [`AND(${PEND},NOT(ISNUMBER(${ref})))`], style: { fill: cfFill(AMARILLO) } },
-            { type: 'expression', priority: 4, formulae: [`AND(ISNUMBER(${ref}),ISERROR(SEARCH(TEXT(${ref},"hh:mm"),${X0}${RF('reloj')})))`], style: { fill: cfFill(AZUL), font: { italic: true, color: { argb: 'FF1F4E79' } } } },
+            { type: 'expression', priority: 4, formulae: [`AND(ISNUMBER(${ref}),ISERROR(SEARCH(TEXT(${ref},"hh:mm"),${X0}${RF('reloj')})))`], style: { fill: cfFill(AZUL), font: { italic: true, color: { argb: AZUL_FER } } } },
           ],
         });
       }
@@ -354,7 +383,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
         type: 'list', allowBlank: true, formulae: [`"${MOTIVOS.join(',')}"`],
         showErrorMessage: true, errorStyle: 'stop', errorTitle: 'Motivo', error: `Elige uno de la lista: ${MOTIVOS.join(', ')}.`,
         showInputMessage: true, promptTitle: 'Motivo',
-        prompt: 'Vacaciones / Salud: día completo trabajado. Compensado: usa horas a favor. Estudio: horas en contra. Falta: horas en contra y cuenta como falta.',
+        prompt: 'Vacaciones / Salud: día completo trabajado. Compensado: se descuenta de las horas extras. Estudio y Falta: horas en contra.',
       });
     });
 
@@ -403,9 +432,8 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
   }
 
   const refRango = (r: number) => `'${HOJAS.asis}'!$${X0}$${r}:$${L(cUlt)}$${r}`;
-  const refFila = (k: keyof typeof FILA, i: number) => refRango(filaBloque(i) + FILA[k]);
-  const saldoTxt = (expr: string) => `IF(${expr}<0,"-","+")&TEXT(ABS(${expr}),"[h]:mm")`;
-  const saldoRes = (m: number) => `${m < 0 ? '-' : '+'}${fmtDur(Math.abs(m))}`;
+  const refFila = (k: Fila, i: number) => refRango(filaBloque(i) + FILA[k]);
+  const refTot = (k: Fila, i: number) => `'${HOJAS.asis}'!$${L(cTot)}$${filaBloque(i) + FILA[k]}`;
 
   // =====================================================================
   // RESUMEN
@@ -415,19 +443,40 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
     ponerLogo(ws, 130);
     ws.getCell('C1').value = `RESUMEN ${titulo}`;
     ws.getCell('C1').font = { bold: true, size: 16, color: { argb: ROJO } };
-    ws.getCell('C2').value = `Período ${periodo}. Todo se calcula solo desde la hoja Asistencia.`;
+    ws.getCell('C2').value = `Período ${periodo}. Todo se calcula solo desde la hoja Asistencia. Solo el valor hora se puede corregir aquí.`;
     ws.getCell('C2').font = { color: { argb: GRIS_OSC } };
     const r1 = RES.primeraFila;
     const rT = r1 + mes.filas.length;
     const ban = ws.getCell('C3');
-    ban.value = { formula: `IF(${col(RES.pendientes)}${rT}=0,"✔ Sin datos pendientes.","⚠ Todavía faltan "&${col(RES.pendientes)}${rT}&" datos en la hoja Asistencia: el resumen puede cambiar.")` };
+    const sinVH = mes.filas.length ? `COUNTIF(${col(RES.valorHora)}${r1}:${col(RES.valorHora)}${rT - 1},"<=0")+COUNTBLANK(${col(RES.valorHora)}${r1}:${col(RES.valorHora)}${rT - 1})` : '0';
+    ban.value = {
+      formula:
+        `IF(AND(${col(RES.pendientes)}${rT}=0,${sinVH}=0),"✔ Sin datos pendientes.",` +
+        `IF(${col(RES.pendientes)}${rT}>0,"⚠ Todavía faltan "&${col(RES.pendientes)}${rT}&" datos en la hoja Asistencia: el resumen puede cambiar. ","")` +
+        `&IF(${sinVH}>0,"⚠ Falta el valor hora de "&${sinVH}&" persona(s) (celdas amarillas).",""))`,
+    };
     ban.font = { bold: true, size: 12, color: { argb: ROJO_TXT } };
 
+    const grupos: [number, number, string, string][] = [
+      [RES.extra1, RES.compensado, 'HORAS EXTRAS DEL MES', 'FF548235'],
+      [RES.neto1, RES.monto, 'A PAGAR (después de descontar compensadas)', 'FF1E5631'],
+      [RES.nosDebe, RES.pendientes, 'APARTE', 'FF7F7F7F'],
+    ];
+    for (const [a, b, txt, color] of grupos) {
+      ws.mergeCells(r1 - 2, a, r1 - 2, b);
+      const c = ws.getCell(r1 - 2, a);
+      c.value = txt;
+      c.alignment = { horizontal: 'center' };
+      c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      c.fill = fill(color);
+    }
     const cab: [number, string, number, string?][] = [
-      [1, 'N°', 5], [RES.nombre, 'Nombre', 14], [RES.empresa, 'Empresa', 11], [RES.faltas, 'Faltas', 8],
-      [RES.trabajado, 'Horas trabajadas', 11], [RES.base, 'Horas base del mes', 11],
-      [RES.favor, 'Horas a favor', 11, 'FF548235'], [RES.contra, 'Horas en contra', 11, 'FFC00000'], [RES.compensado, 'Horas compensadas', 12, MORADO],
-      [RES.saldo, 'SALDO del mes', 12, 'FF404040'], [RES.pendientes, 'Datos por completar', 11],
+      [1, 'N°', 5], [RES.nombre, 'Nombre', 14], [RES.empresa, 'Empresa', 11], [RES.faltas, 'Faltas', 7],
+      [RES.trabajado, 'Horas trabajadas', 10], [RES.base, 'Horas base del mes', 10],
+      [RES.extra1, `Extras ${P1}`, 10, 'FF548235'], [RES.extra2, `Extras ${P2}`, 10, 'FF548235'], [RES.compensado, 'Compensadas', 11, MORADO],
+      [RES.neto1, `Extras ${P1}`, 10, 'FF1E5631'], [RES.neto2, `Extras ${P2}`, 10, 'FF1E5631'], [RES.feriado, `Dom./feriado ${PF}`, 10, AZUL_FER],
+      [RES.valorHora, 'Valor hora', 10, 'FF1E5631'], [RES.monto, 'TOTAL A PAGAR', 13, 'FF1E5631'],
+      [RES.nosDebe, 'Nos debe (compensadas sin cubrir)', 12, ROJO_TXT], [RES.contra, 'Horas en contra', 10, 'FFC00000'], [RES.pendientes, 'Datos por completar', 10],
     ];
     for (const [c, t, w, color] of cab) {
       const cell = ws.getCell(r1 - 1, c);
@@ -436,28 +485,34 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       if (color) cell.fill = fill(color);
       ws.getColumn(c).width = w;
     }
-    ws.getRow(r1 - 1).height = 36;
+    ws.getRow(r1 - 1).height = 45;
 
     mes.filas.forEach((fp, i) => {
       const r = r1 + i;
       const p = fp.persona;
       const b = filaBloque(i);
       const S = (c: number) => `${col(c)}${r}`;
-      const neto = `(${S(RES.favor)}-${S(RES.contra)}-${S(RES.compensado)})`;
       const Tr = refRango(R_TIPO), Fr = refRango(R_FECHA);
       const ING = `'${HOJAS.asis}'!$${L(PAR.ing)}$${b}`, JOR = `'${HOJAS.asis}'!$${L(PAR.jor)}$${b}`;
+      const t = fp.tot;
       const vals: [number, ExcelJS.CellValue, string?][] = [
         [1, i + 1],
         [RES.nombre, { text: p.alias, hyperlink: `#'${HOJAS.asis}'!A${b}` }],
         [RES.empresa, p.empresa || null],
-        [RES.faltas, { formula: `COUNTIF(${refFila('motivo', i)},"Falta")`, result: fp.tot.faltas }, '0;;""'],
-        [RES.trabajado, { formula: `SUM(${refFila('trabajado', i)})`, result: fp.tot.trabajado / 1440 }, '[h]:mm'],
-        [RES.base, { formula: `(COUNTIFS(${Tr},"LV",${Fr},">="&${ING})+COUNTIFS(${Tr},"SAB",${Fr},">="&${ING}))*${JOR}/1440`, result: fp.tot.base / 1440 }, '[h]:mm'],
-        [RES.favor, { formula: `SUM(${refFila('favor', i)})`, result: fp.tot.favor / 1440 }, '[h]:mm'],
-        [RES.contra, { formula: `SUM(${refFila('contra', i)})`, result: fp.tot.contra / 1440 }, '[h]:mm'],
-        [RES.compensado, { formula: `SUM(${refFila('compensado', i)})`, result: fp.tot.compensado / 1440 }, '[h]:mm'],
-        [RES.saldo, { formula: saldoTxt(neto), result: saldoRes(fp.tot.saldo) }],
-        [RES.pendientes, { formula: `'${HOJAS.asis}'!${pendTotal(i)}`, result: fp.tot.pendientes }, '0;;"✔"'],
+        [RES.faltas, { formula: `COUNTIF(${refFila('motivo', i)},"Falta")`, result: t.faltas }, '0;;""'],
+        [RES.trabajado, { formula: refTot('trabajado', i), result: t.trabajado / 1440 }, '[h]:mm'],
+        [RES.base, { formula: `(COUNTIFS(${Tr},"LV",${Fr},">="&${ING})+COUNTIFS(${Tr},"SAB",${Fr},">="&${ING}))*${JOR}/1440`, result: t.base / 1440 }, '[h]:mm'],
+        [RES.extra1, { formula: refTot('extra1', i), result: t.extra1 / 1440 }, '[h]:mm'],
+        [RES.extra2, { formula: refTot('extra2', i), result: t.extra2 / 1440 }, '[h]:mm'],
+        [RES.compensado, { formula: refTot('compensado', i), result: t.compensado / 1440 }, '[h]:mm'],
+        [RES.neto1, { formula: refTot('neto1', i), result: t.neto1 / 1440 }, '[h]:mm'],
+        [RES.neto2, { formula: refTot('neto2', i), result: t.neto2 / 1440 }, '[h]:mm'],
+        [RES.feriado, { formula: refTot('feriado', i), result: t.enFeriado / 1440 }, '[h]:mm'],
+        [RES.valorHora, p.valorHora || null, SOLES],
+        [RES.monto, { formula: `ROUND(${S(RES.neto1)}*24*${S(RES.valorHora)}*${R.recargo1}+${S(RES.neto2)}*24*${S(RES.valorHora)}*${R.recargo2}+${S(RES.feriado)}*24*${S(RES.valorHora)}*${R.recargoFeriado},2)`, result: t.monto }, SOLES],
+        [RES.nosDebe, { formula: `MAX(${S(RES.compensado)}-${S(RES.extra1)}-${S(RES.extra2)},0)`, result: t.nosDebe / 1440 }, '[h]:mm;;""'],
+        [RES.contra, { formula: refTot('contra', i), result: t.contra / 1440 }, '[h]:mm'],
+        [RES.pendientes, { formula: `'${HOJAS.asis}'!${pendTotal(i)}`, result: t.pendientes }, '0;;"✔"'],
       ];
       for (const [c, v, fmt] of vals) {
         const cell = ws.getCell(r, c);
@@ -466,44 +521,57 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
         cell.border = bordes;
         cell.alignment = { horizontal: c === RES.nombre ? 'left' : 'center' };
       }
-      ws.getCell(r, RES.nombre).font = { bold: true, color: { argb: 'FF1F4E79' }, underline: true };
+      ws.getCell(r, RES.nombre).font = { bold: true, color: { argb: AZUL_FER }, underline: true };
       ws.getCell(r, RES.compensado).font = { bold: true, color: { argb: MORADO } };
-      ws.getCell(r, RES.saldo).font = { bold: true, size: 12 };
+      ws.getCell(r, RES.feriado).font = { bold: true, color: { argb: AZUL_FER } };
+      ws.getCell(r, RES.monto).font = { bold: true, size: 12, color: { argb: VERDE_OSC } };
+      ws.getCell(r, RES.monto).fill = fill('FFC6EFCE');
+      const vh = ws.getCell(r, RES.valorHora);
+      vh.protection = { locked: false };
+      vh.dataValidation = { type: 'decimal', operator: 'between', formulae: [0, 999], allowBlank: true, showErrorMessage: true, errorStyle: 'stop', errorTitle: 'Valor hora', error: 'Escribe el valor de una hora en soles, por ejemplo 6.25 (sueldo ÷ 240).' };
     });
     // Totales
     ws.getCell(rT, RES.nombre).value = 'TOTAL';
     ws.getCell(rT, RES.nombre).font = { bold: true };
     for (let c: number = RES.faltas; c <= RES.pendientes; c++) {
+      if (c === RES.valorHora) continue;
       const cell = ws.getCell(rT, c);
-      if (c === RES.saldo) {
-        cell.value = { formula: saldoTxt(`(${col(RES.favor)}${rT}-${col(RES.contra)}${rT}-${col(RES.compensado)}${rT})`) };
-      } else {
-        cell.value = { formula: mes.filas.length ? `SUM(${col(c)}${r1}:${col(c)}${rT - 1})` : '0' };
-        cell.numFmt = ws.getCell(r1, c).numFmt;
-      }
-      cell.font = { bold: true };
+      cell.value = { formula: mes.filas.length ? `SUM(${col(c)}${r1}:${col(c)}${rT - 1})` : '0' };
+      cell.numFmt = ws.getCell(r1, c).numFmt;
+      cell.font = { bold: true, color: { argb: c === RES.monto ? VERDE_OSC : 'FF000000' } };
       cell.alignment = { horizontal: 'center' };
       cell.border = { top: { style: 'double' }, bottom: thin };
     }
     if (mes.filas.length) {
       const rr = (c: number) => `${col(c)}${r1}:${col(c)}${rT}`;
-      const fav = `$${col(RES.favor)}${r1}`, con = `$${col(RES.contra)}${r1}`, cmp = `$${col(RES.compensado)}${r1}`;
-      ws.addConditionalFormatting({ ref: rr(RES.faltas), rules: [{ type: 'cellIs', operator: 'greaterThan', formulae: ['0'], priority: 1, style: { font: { bold: true, color: { argb: ROJO_TXT } } } }] });
-      ws.addConditionalFormatting({ ref: rr(RES.favor), rules: [{ type: 'cellIs', operator: 'greaterThan', formulae: ['0'], priority: 1, style: { font: { bold: true, color: { argb: VERDE_TXT } }, fill: cfFill(VERDE) } }] });
-      ws.addConditionalFormatting({ ref: rr(RES.contra), rules: [{ type: 'cellIs', operator: 'greaterThan', formulae: ['0'], priority: 1, style: { font: { bold: true, color: { argb: ROJO_TXT } }, fill: cfFill(ROSA) } }] });
-      ws.addConditionalFormatting({ ref: rr(RES.compensado), rules: [{ type: 'cellIs', operator: 'greaterThan', formulae: ['0'], priority: 1, style: { fill: cfFill('FFE4DFEC') } }] });
+      const mayor0 = (c: number, style: Partial<ExcelJS.Style>) =>
+        ws.addConditionalFormatting({ ref: rr(c), rules: [{ type: 'cellIs', operator: 'greaterThan', formulae: ['0'], priority: 1, style }] });
+      mayor0(RES.faltas, { font: { bold: true, color: { argb: ROJO_TXT } } });
+      mayor0(RES.extra1, { font: { bold: true, color: { argb: VERDE_TXT } }, fill: cfFill(VERDE) });
+      mayor0(RES.extra2, { font: { bold: true, color: { argb: VERDE_TXT } }, fill: cfFill(VERDE) });
+      mayor0(RES.compensado, { fill: cfFill('FFE4DFEC') });
+      mayor0(RES.neto1, { font: { bold: true, color: { argb: VERDE_OSC } } });
+      mayor0(RES.neto2, { font: { bold: true, color: { argb: VERDE_OSC } } });
+      mayor0(RES.nosDebe, { font: { bold: true, color: { argb: ROJO_TXT } }, fill: cfFill(ROSA) });
+      mayor0(RES.contra, { font: { bold: true, color: { argb: ROJO_TXT } }, fill: cfFill(ROSA) });
+      mayor0(RES.pendientes, { fill: cfFill(AMARILLO), font: { bold: true } });
       ws.addConditionalFormatting({
-        ref: rr(RES.saldo),
-        rules: [
-          { type: 'expression', priority: 1, formulae: [`${fav}-${con}-${cmp}>0`], style: { fill: cfFill('FFC6EFCE'), font: { bold: true, color: { argb: 'FF006100' } } } },
-          { type: 'expression', priority: 2, formulae: [`${fav}-${con}-${cmp}<0`], style: { fill: cfFill(ROSA), font: { bold: true, color: { argb: ROJO_TXT } } } },
-        ],
+        ref: `${col(RES.valorHora)}${r1}:${col(RES.valorHora)}${rT - 1}`,
+        rules: [{ type: 'expression', priority: 1, formulae: [`OR(${col(RES.valorHora)}${r1}="",${col(RES.valorHora)}${r1}<=0)`], style: { fill: cfFill(AMARILLO) } }],
       });
-      ws.addConditionalFormatting({ ref: rr(RES.pendientes), rules: [{ type: 'cellIs', operator: 'greaterThan', formulae: ['0'], priority: 1, style: { fill: cfFill(AMARILLO), font: { bold: true } } }] });
       ws.autoFilter = { from: { row: r1 - 1, column: 1 }, to: { row: rT - 1, column: RES.pendientes } };
     }
-    ws.getCell(rT + 2, RES.nombre).value = 'SALDO del mes = horas a favor − horas en contra − horas compensadas. Verde (+) = le debemos horas; rojo (−) = nos debe horas.';
-    ws.getCell(rT + 2, RES.nombre).font = { italic: true, size: 9, color: { argb: GRIS_OSC } };
+    const notas = [
+      `Extras: las ${horasTramo} primeras de cada día van al ${P1} y el resto al ${P2}. Domingo/feriado trabajado: ${PF}.`,
+      'Las horas compensadas se descuentan de las extras de los primeros días del período (en cada día, primero las del ' + P2 + ').',
+      'Si las compensadas son más que las extras, la diferencia aparece en "Nos debe". Las horas en contra van aparte y no se descuentan de las extras.',
+      `TOTAL A PAGAR = (extras ${P1} × ${R.recargo1} + extras ${P2} × ${R.recargo2} + dom./feriado × ${R.recargoFeriado}) × valor hora.`,
+    ];
+    notas.forEach((txt, k) => {
+      const c = ws.getCell(rT + 2 + k, RES.nombre);
+      c.value = txt;
+      c.font = { italic: true, size: 9, color: { argb: GRIS_OSC } };
+    });
     ws.views = [{ state: 'frozen', ySplit: r1 - 1, xSplit: 2, showGridLines: false }];
     ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
     await proteger(ws, { autoFilter: true, sort: true });
@@ -517,7 +585,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
     ponerLogo(ws, 130);
     ws.getCell('C1').value = `HORAS POR SEMANA ${titulo}`;
     ws.getCell('C1').font = { bold: true, size: 16, color: { argb: ROJO } };
-    ws.getCell('C2').value = 'Semanas de lunes a sábado. Se calcula solo desde la hoja Asistencia.';
+    ws.getCell('C2').value = 'Semanas de lunes a sábado. Se calcula solo desde la hoja Asistencia. Extras antes de descontar compensadas.';
     ws.getCell('C2').font = { color: { argb: GRIS_OSC } };
     const semanas = [...new Set(mes.fechas.map((f) => f.semana))];
     const r1 = 7;
@@ -530,7 +598,15 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
     }
     ws.getRow(r1 - 1).height = 30;
     const semRango = refRango(R_SEMANA);
-    const ANCHO = 5;
+    const COLS: [Fila, string, string, (d: Mes['filas'][number]['dias'][number]) => number][] = [
+      ['trabajado', 'Trabajadas', ROJO, (d) => d.calc.trabajado],
+      ['extra1', `Extra ${P1}`, 'FF548235', (d) => d.calc.extra1],
+      ['extra2', `Extra ${P2}`, 'FF548235', (d) => d.calc.extra2],
+      ['feriado', 'Dom./Fer.', AZUL_FER, (d) => d.calc.enFeriado],
+      ['contra', 'En contra', 'FFC00000', (d) => d.calc.contra],
+      ['compensado', 'Compen- sadas', MORADO, (d) => d.calc.compensado],
+    ];
+    const ANCHO = COLS.length;
     semanas.forEach((k, si) => {
       const dias = mes.fechas.filter((f) => f.semana === k).map((f) => f.fecha);
       const parcial = weekday(dias[0]) !== 1 || dias.filter((f) => weekday(f) <= 6).length < 6;
@@ -541,50 +617,25 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       h.alignment = { horizontal: 'center' };
       h.font = { bold: true, color: { argb: 'FFFFFFFF' } };
       h.fill = fill(si % 2 ? 'FF2F5597' : 'FF5B9BD5');
-      (['Trabajadas', 'A favor', 'En contra', 'Compensadas', 'Saldo'] as const).forEach((t, j) => {
+      COLS.forEach(([, t, color], j) => {
         const c = ws.getCell(r1 - 1, a + j);
         c.value = t;
         estiloCabecera(c);
-        if (j === 1) c.fill = fill('FF548235');
-        if (j === 2) c.fill = fill('FFC00000');
-        if (j === 3) c.fill = fill(MORADO);
-        ws.getColumn(a + j).width = 10;
+        c.fill = fill(color);
+        ws.getColumn(a + j).width = 9;
       });
       mes.filas.forEach((fp, i) => {
         const r = r1 + i;
         const dd = fp.dias.filter((_, j) => mes.fechas[j].semana === k);
-        const sum = (f: (x: (typeof dd)[number]) => number) => dd.reduce((acc, x) => acc + f(x), 0);
-        const vals: [keyof typeof FILA, number, string][] = [
-          ['trabajado', sum((x) => x.calc.trabajado), 'FF000000'],
-          ['favor', sum((x) => x.calc.favor), VERDE_TXT],
-          ['contra', sum((x) => x.calc.contra), ROJO_TXT],
-          ['compensado', sum((x) => x.calc.compensado), MORADO],
-        ];
-        vals.forEach(([kk, res, color], j) => {
+        COLS.forEach(([kk, , , f], j) => {
           const c = ws.getCell(r, a + j);
-          c.value = { formula: `SUMIF(${semRango},${k},${refFila(kk, i)})`, result: res / 1440 };
+          c.value = { formula: `SUMIF(${semRango},${k},${refFila(kk, i)})`, result: dd.reduce((acc, x) => acc + f(x), 0) / 1440 };
           c.numFmt = j === 0 ? '[h]:mm' : '[h]:mm;;""';
-          c.border = bordes;
+          c.border = j === ANCHO - 1 ? { ...bordes, right: grueso } : bordes;
           c.alignment = { horizontal: 'center' };
-          c.font = { bold: j > 0, color: { argb: color } };
+          c.font = { bold: j > 0, color: { argb: COLOR_TXT[kk] ?? 'FF000000' } };
         });
-        const net = vals[1][1] - vals[2][1] - vals[3][1];
-        const cn = ws.getCell(r, a + 4);
-        cn.value = { formula: saldoTxt(`(${col(a + 1)}${r}-${col(a + 2)}${r}-${col(a + 3)}${r})`), result: saldoRes(net) };
-        cn.font = { bold: true };
-        cn.border = { ...bordes, right: grueso };
-        cn.alignment = { horizontal: 'center' };
       });
-      const exp = (r: number) => `(${col(a + 1)}${r}-${col(a + 2)}${r}-${col(a + 3)}${r})`;
-      if (mes.filas.length) {
-        ws.addConditionalFormatting({
-          ref: `${col(a + 4)}${r1}:${col(a + 4)}${r1 + mes.filas.length - 1}`,
-          rules: [
-            { type: 'expression', priority: 1, formulae: [`${exp(r1)}>0`], style: { fill: cfFill('FFC6EFCE'), font: { color: { argb: 'FF006100' } } } },
-            { type: 'expression', priority: 2, formulae: [`${exp(r1)}<0`], style: { fill: cfFill(ROSA), font: { color: { argb: ROJO_TXT } } } },
-          ],
-        });
-      }
     });
     mes.filas.forEach((fp, i) => {
       const r = r1 + i;
@@ -610,7 +661,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
     ponerLogo(ws, 170);
     ws.getColumn(1).width = 4;
     ws.getColumn(2).width = 5;
-    ws.getColumn(3).width = 95;
+    ws.getColumn(3).width = 100;
     const lineas: [string, ('t' | 'h' | 'c')?, string?][] = [
       [`CONTROL DE ASISTENCIA ${titulo}`, 't'],
       [`Período ${periodo}.`],
@@ -618,13 +669,21 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       ['Cómo trabajar', 'h'],
       ['1. En la hoja "Asistencia" completa las celdas AMARILLAS: escribe la hora (18:05) o elige un motivo.'],
       ['2. Arriba de la hoja dice cuántas faltan. Cuando diga "✔ Todo completo", revisa la hoja "Resumen".'],
-      ['3. Si pasas el mouse por una celda gris con triángulo rojo (fila Reloj), verás qué pasó ese día.'],
+      ['3. En "Resumen" revisa el valor hora de cada persona (si está en amarillo, escríbelo): el total a pagar se calcula solo.'],
+      ['4. Si pasas el mouse por una celda gris con triángulo rojo (fila Reloj), verás qué pasó ese día.'],
       [''],
       ['Motivos', 'h'],
       ['Vacaciones / Salud: se cuenta como día completo trabajado.'],
-      ['Compensado: la persona usa sus horas a favor (sale antes o falta el día). Va a "Horas compensadas".'],
+      ['Compensado: la persona usa horas extras (sale antes o falta el día). Se descuenta de las extras de los primeros días del mes.'],
       ['Estudio: lo que no trabajó se cuenta como horas en contra.'],
       ['Falta: el día completo es hora en contra y se cuenta como falta.'],
+      [''],
+      ['Horas extras', 'h'],
+      [`• Cuentan si sale a las 18:${String(MARG).padStart(2, '0')} o después, desde las 18:00 (sábado desde las 12:00 si sale 12:${String(MARG).padStart(2, '0')} o después).`],
+      [`• Cada día: las ${horasTramo} primeras van al ${P1}; las siguientes, al ${P2}. Domingo o feriado trabajado: ${PF}.`],
+      [`• Las compensadas se descuentan de las extras desde el primer día (primero las del ${P2}). Lo que no alcance a cubrirse aparece en "Nos debe".`],
+      ['• Llegar temprano no suma horas.'],
+      ['• Tardanza (después de las 08:30) y salida antes de hora: horas en contra. Van aparte, no se descuentan de las extras.'],
       [''],
       ['Colores', 'h'],
       ['Falta un dato.', 'c', AMARILLO],
@@ -633,13 +692,6 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       ['Hora escrita a mano (no es la del reloj).', 'c', AZUL],
       ['Revisar: la salida es antes que la entrada. ¿Escribiste 6:14 en vez de 18:14?', 'c', 'FFFF7C80'],
       ['Calculado solo. No se escribe.', 'c', GRIS],
-      [''],
-      ['Reglas', 'h'],
-      ['• Tardanza (después de las 08:30) y salida antes de hora: horas en contra.'],
-      ['• Llegar antes de las 08:00: horas a favor (desde la llegada hasta las 08:30).'],
-      [`• Extras: si sale a las 18:${String(MARG).padStart(2, '0')} o después, se cuentan desde las 18:00 (sábado desde las 12:00).`],
-      ['• Domingo o feriado trabajado: todo el tiempo es a favor.'],
-      ['• SALDO del mes = a favor − en contra − compensadas.'],
       [''],
       ['Las hojas están protegidas SIN contraseña solo para no borrar fórmulas por accidente.'],
     ];

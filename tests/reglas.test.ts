@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { configInicial, personaNueva, type Persona } from '../src/lib/config';
-import { calcularDia, clasificar, deduplicar } from '../src/lib/rules';
+import { calcularDia, clasificar, deduplicar, descontarCompensadas } from '../src/lib/rules';
+import { montoSoles } from '../src/lib/model';
 import { parseHHMM } from '../src/lib/time';
 
 const cfg = configInicial(2026);
@@ -9,6 +10,7 @@ const base = (cambios: Partial<Persona> = {}): Persona => ({ ...personaNueva({ i
 type Tipo = 'LV' | 'SAB' | 'DOM' | 'FER';
 const calc = (e: string | null, s: string | null, motivo = '', tipo: Tipo = 'LV', p = base(), r = cfg.reglas) =>
   calcularDia({ entrada: e ? h(e) : null, salida: s ? h(s) : null, motivo }, tipo, p, r, true);
+const ext = (r: { extra1: number; extra2: number }) => r.extra1 + r.extra2;
 const dia = (marcas: string[], tipo: Tipo = 'LV', p = base()) => {
   const c = clasificar(marcas.map(h), tipo, p, true);
   return { c, r: calcularDia({ entrada: c.entrada, salida: c.salida, motivo: '' }, tipo, p, cfg.reglas, true) };
@@ -54,12 +56,17 @@ describe('marcadas', () => {
   });
 });
 
-describe('horas a favor / en contra', () => {
+describe('horas extras y en contra', () => {
   it('salida 18:19 no da extras; 18:20 sí (desde las 18:00)', () => {
-    expect(calc('08:30', '18:19').favor).toBe(0);
-    expect(calc('08:30', '18:20').favor).toBe(20);
-    expect(calc('08:30', '19:05').favor).toBe(65);
-    expect(calc('08:30', '21:00').favor).toBe(180);
+    expect(ext(calc('08:30', '18:19'))).toBe(0);
+    expect(calc('08:30', '18:20')).toMatchObject({ extra1: 20, extra2: 0 });
+    expect(calc('08:30', '19:05')).toMatchObject({ extra1: 65, extra2: 0 });
+  });
+
+  it('cada día: 2 primeras horas al 25%, el resto al 35%', () => {
+    expect(calc('08:30', '20:00')).toMatchObject({ extra1: 120, extra2: 0 });
+    expect(calc('08:30', '21:00')).toMatchObject({ extra1: 120, extra2: 60 });
+    expect(calc('08:30', '21:30')).toMatchObject({ extra1: 120, extra2: 90 });
   });
 
   it('toda tardanza (después de las 08:30) es hora en contra', () => {
@@ -69,22 +76,21 @@ describe('horas a favor / en contra', () => {
     expect(calc('08:30', '17:52').contra).toBe(8);
   });
 
-  it('llegar antes de las 08:00 es hora a favor (hasta las 08:30)', () => {
-    expect(calc('08:05', '18:00').favor).toBe(0);
-    expect(calc('07:59', '18:00').favor).toBe(31);
-    expect(calc('06:37', '18:01').favor).toBe(113);
+  it('llegar temprano no suma horas', () => {
+    expect(ext(calc('07:59', '18:00'))).toBe(0);
+    expect(ext(calc('06:37', '18:01'))).toBe(0);
   });
 
   it('sábado normal, con extras y salida temprana', () => {
-    expect(calc('08:26', '12:19', '', 'SAB')).toMatchObject({ favor: 0, contra: 0, trabajado: 233 });
-    expect(calc('08:04', '15:37', '', 'SAB').favor).toBe(217);
+    expect(calc('08:26', '12:19', '', 'SAB')).toMatchObject({ extra1: 0, extra2: 0, contra: 0, trabajado: 233 });
+    expect(calc('08:04', '15:37', '', 'SAB')).toMatchObject({ extra1: 120, extra2: 97 });
     expect(calc('08:30', '10:42', '', 'SAB').contra).toBe(78);
     expect(dia(['07:51', '10:42'], 'SAB').r.pendiente).toBe(true);
   });
 
-  it('feriado / domingo trabajado: todo suma a favor', () => {
-    expect(calc('09:00', '13:00', '', 'FER')).toMatchObject({ favor: 240, enFeriado: 240, contra: 0 });
-    expect(calc('09:00', '13:00', '', 'DOM', base(), { ...cfg.reglas, factorFeriado: 2 }).favor).toBe(480);
+  it('feriado / domingo trabajado: va aparte (100%), no como extra', () => {
+    expect(calc('09:00', '13:00', '', 'FER')).toMatchObject({ enFeriado: 240, extra1: 0, extra2: 0, contra: 0 });
+    expect(calc('09:00', '20:00', '', 'DOM')).toMatchObject({ enFeriado: 660, extra1: 0 });
   });
 
   it('salida antes que la entrada (formato 12 h) da alerta', () => {
@@ -93,20 +99,20 @@ describe('horas a favor / en contra', () => {
 
   it('antes de la fecha de ingreso no cuenta nada', () => {
     const r = calcularDia({ entrada: null, salida: null, motivo: '' }, 'LV', base(), cfg.reglas, false);
-    expect(r).toMatchObject({ pendiente: false, favor: 0, contra: 0, compensado: 0 });
+    expect(r).toMatchObject({ pendiente: false, extra1: 0, contra: 0, compensado: 0 });
   });
 });
 
 describe('motivos', () => {
   it('Vacaciones y Salud: día completo trabajado, sin nada en contra', () => {
     for (const m of ['Vacaciones', 'Salud']) {
-      expect(calc(null, null, m)).toMatchObject({ pendiente: false, contra: 0, favor: 0, compensado: 0, trabajado: 570 - 45 });
+      expect(calc(null, null, m)).toMatchObject({ pendiente: false, contra: 0, extra1: 0, compensado: 0, trabajado: 570 - 45 });
       expect(calc(null, null, m, 'SAB')).toMatchObject({ contra: 0, trabajado: 210 });
     }
   });
 
   it('Falta: la jornada es hora en contra y cuenta como falta', () => {
-    expect(calc(null, null, 'Falta')).toMatchObject({ pendiente: false, falta: true, contra: 480, favor: 0 });
+    expect(calc(null, null, 'Falta')).toMatchObject({ pendiente: false, falta: true, contra: 480, extra1: 0 });
     expect(calc(null, null, 'Falta', 'SAB').contra).toBe(210);
   });
 
@@ -126,7 +132,37 @@ describe('motivos', () => {
     expect(calc(null, null, 'Falta', 'LV', base({ horasSemanales: 24 })).contra).toBe(240);
     expect(calc(null, null, 'Falta', 'LV', base({ descuenta: false }))).toMatchObject({ contra: 0, falta: true });
     const seb = base({ horasSemanales: 24, salidaLV: h('12:00'), extrasDesdeLV: h('18:00'), descuenta: false });
-    expect(calc('08:31', '12:14', '', 'LV', seb)).toMatchObject({ favor: 0, contra: 0, pendiente: false });
-    expect(calc('08:31', '18:47', '', 'LV', seb).favor).toBe(47);
+    expect(calc('08:31', '12:14', '', 'LV', seb)).toMatchObject({ extra1: 0, contra: 0, pendiente: false });
+    expect(calc('08:31', '18:47', '', 'LV', seb).extra1).toBe(47);
+  });
+});
+
+describe('compensadas y soles', () => {
+  const dias = [
+    { extra1: 120, extra2: 30 }, // día 1: 2:30 extras
+    { extra1: 0, extra2: 0 },
+    { extra1: 60, extra2: 0 }, // día 3: 1:00
+    { extra1: 120, extra2: 60 }, // día 4: 3:00
+  ];
+
+  it('se descuentan desde el primer día, primero las del 35%', () => {
+    const r = descontarCompensadas(dias, 100);
+    expect(r.netos).toEqual([{ neto1: 50, neto2: 0 }, { neto1: 0, neto2: 0 }, { neto1: 60, neto2: 0 }, { neto1: 120, neto2: 60 }]);
+    expect(r.nosDebe).toBe(0);
+    const r2 = descontarCompensadas(dias, 200); // 150 del día 1, 50 del día 3
+    expect(r2.netos.map((n) => n.neto1 + n.neto2)).toEqual([0, 0, 10, 180]);
+  });
+
+  it('si las compensadas superan las extras, el resto es "nos debe"', () => {
+    const r = descontarCompensadas(dias, 600);
+    expect(r.netos.every((n) => n.neto1 === 0 && n.neto2 === 0)).toBe(true);
+    expect(r.nosDebe).toBe(600 - 390);
+    expect(descontarCompensadas(dias, 0).netos[3]).toEqual({ neto1: 120, neto2: 60 });
+  });
+
+  it('monto en soles con recargos de ley', () => {
+    // 2 h al 25% + 1 h al 35% + 4 h de feriado, valor hora S/ 10
+    expect(montoSoles({ neto1: 120, neto2: 60, enFeriado: 240 }, 10, cfg.reglas)).toBe(25 + 13.5 + 80);
+    expect(montoSoles({ neto1: 20, neto2: 0, enFeriado: 0 }, 7.37, cfg.reglas)).toBe(3.07);
   });
 });

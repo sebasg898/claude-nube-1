@@ -17,28 +17,28 @@ Nada sale de la computadora. La configuración (personas y reglas) se guarda en 
 
 | Hoja | Qué tiene |
 |---|---|
-| Leeme | Cómo usarlo, motivos, colores y reglas. |
-| Asistencia | Por persona: Reloj · Entrada (verde) · Salida (naranja) · Motivo · Horas trabajadas · A favor · En contra · Compensadas. Columnas = días, con líneas por semana; total y conteo de datos por completar por persona. |
-| Semanal | Trabajadas / a favor / en contra / compensadas / saldo por semana (lunes a sábado). |
-| Resumen | Faltas · horas trabajadas · horas base del mes · a favor · en contra · compensadas · **SALDO del mes** (verde le debemos / rojo nos debe) · datos por completar. |
+| Leeme | Cómo usarlo, motivos, horas extras y colores. |
+| Asistencia | Por persona: Reloj · Entrada (verde) · Salida (naranja) · Motivo · Horas trabajadas · Extra 25% · Extra 35% · Dom./Feriado · En contra · Compensadas (+2 filas ocultas: extras a pagar después de descontar compensadas). Columnas = días, con líneas por semana. |
+| Semanal | Por semana (lunes a sábado): trabajadas, extra 25%, extra 35%, dom./feriado, en contra, compensadas. |
+| Resumen | Faltas · horas trabajadas · base del mes · **extras 25% / 35%** · compensadas · **a pagar 25% / 35% / dom.-feriado 100%** · valor hora (editable) · **TOTAL A PAGAR (S/)** · nos debe · horas en contra · datos por completar. |
 
-- La página decide **entrada y salida** (o las deja vacías si hay duda); todo lo demás son fórmulas simples (`SI`, `MIN`, `CONTAR.SI`, `CONTAR.SI.CONJUNTO`, `SUMAR.SI`, `SUMAPRODUCTO`). El horario de cada persona va en columnas ocultas de Asistencia.
+- La página decide **entrada y salida** (o las deja vacías si hay duda); todo lo demás son fórmulas simples (`SI`, `MIN`, `MAX`, `SUMA`, `CONTAR.SI`, `CONTAR.SI.CONJUNTO`, `SUMAR.SI`, `SUMAPRODUCTO`). El horario de cada persona va en columnas ocultas de Asistencia; el valor hora está a la vista en el Resumen.
 - Hojas protegidas **sin contraseña**. `fullCalcOnLoad` activado. Validaciones: hora fuera de formato o salida antes que la entrada (aviso con confirmación); motivo solo de la lista.
 
 ## Reglas
 
 - Entrada 08:30; salida L-V 18:00; sábado 12:00 (por persona se puede cambiar en la página).
-- **Tardanza** (después de las 08:30) y **salida antes de hora**: horas en contra.
-- **Llegar antes de las 08:00**: horas a favor (desde la llegada hasta las 08:30).
-- **Extras**: si sale 20 min o más después de su hora (18:20 / 12:20), se cuentan desde las 18:00 / 12:00.
-- **Domingo / feriado** trabajado: todo el tiempo es a favor.
-- **Motivos** (lista cerrada):
-  - *Vacaciones* / *Salud*: día completo trabajado (nada en contra).
-  - *Compensado*: canje de horas a favor; lo que falte del día (o la jornada) va a **Compensadas**.
-  - *Estudio*: lo que falte del día (o la jornada) es hora en contra.
-  - *Falta*: la jornada es hora en contra y se cuenta como falta.
-  - Jornada = horas semanales ÷ 6 (8 h; sábado máx. 3:30).
-- **SALDO del mes** = a favor − en contra − compensadas. **Horas base del mes** = días laborables (L-S, sin feriados) × horas semanales ÷ 6.
+- **Horas extras** (D.S. 007-2002-TR, art. 10): cuentan si sale 20 min o más después de su hora (18:20 / 12:20), desde las 18:00 / 12:00.
+  Cada día, las **2 primeras horas al 25%** y **desde la 3.ª al 35%**. Llegar temprano no suma.
+- **Domingo / feriado** trabajado: columna aparte, al **100%**. No se le descuentan compensadas.
+- **Compensadas** (motivo *Compensado*): se descuentan de las extras de los **primeros días del período**, y dentro de cada día **primero las del 35%**.
+  Si las compensadas superan las extras, la diferencia aparece en **"Nos debe"**.
+- **Horas en contra** (tardanza después de las 08:30, salida antes de hora, *Estudio*, *Falta*): van **aparte**; no se descuentan de las extras.
+- **Motivos** (lista cerrada): *Vacaciones* / *Salud* = día completo trabajado; *Compensado*; *Estudio* y *Falta* = en contra (*Falta* también se cuenta).
+  Jornada de un día completo = horas semanales ÷ 6 (8 h; sábado máx. 3:30).
+- **TOTAL A PAGAR** = (extras 25% netas × 1.25 + extras 35% netas × 1.35 + dom./feriado × 2) × valor hora, redondeado a céntimos.
+  Valor hora = sueldo mensual ÷ 240. Los recargos son configurables (mínimos de ley; confirmar con el contador).
+- **Horas base del mes** = días laborables (L-S, sin feriados) × horas semanales ÷ 6.
 - Personas con "Descuenta" = No (casos especiales): no se les resta nada.
 - Marcadas a menos de 3 min se consideran duplicadas.
 
@@ -68,6 +68,6 @@ npm run entrega    # genera entrega/Control-de-asistencia-QALEN.html (un solo ar
 Código: `src/lib/parser.ts` (lectura del reloj), `rules.ts` (clasificación y cálculo de referencia),
 `model.ts` (mes), `excel.ts` (Excel con fórmulas que replican `calcularDia`), `src/ui/*` (pantallas).
 La prueba `tests/excel-sintetico.test.ts` (datos inventados) recalcula el Excel con LibreOffice y verifica que cada número coincida
-con la página, y que completar horas o elegir motivos cambie Semanal y Resumen.
+con la página (incluido el reparto de compensadas y el monto en soles), y que completar horas o elegir motivos cambie Semanal y Resumen.
 
 **Privacidad:** `/samples` y todo `.xls/.xlsx` están en `.gitignore`. No subir datos de personas.

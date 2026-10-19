@@ -137,12 +137,16 @@ export interface DiaInput {
 
 export interface DiaCalculo {
   trabajado: Min;
-  favor: Min;
-  contra: Min;
-  /** Horas canjeadas de la bolsa (motivo "Compensado"). */
-  compensado: Min;
-  /** Parte de "favor" que es por trabajar en domingo/feriado. */
+  /** Horas extras del día (lunes a sábado) en el primer tramo (25%). */
+  extra1: Min;
+  /** Horas extras del día desde la 3.ª hora (35%). */
+  extra2: Min;
+  /** Horas trabajadas en domingo o feriado (100%). */
   enFeriado: Min;
+  /** Horas en contra (tardanza, salida antes de hora, Estudio, Falta). Van aparte. */
+  contra: Min;
+  /** Horas canjeadas (motivo "Compensado"). Se descuentan de las extras de los primeros días. */
+  compensado: Min;
   /** Falta un dato (celda amarilla). */
   pendiente: boolean;
   /** Salida igual o anterior a la entrada (casi siempre: hora escrita en formato de 12 h). */
@@ -167,7 +171,7 @@ export function diaCompleto(p: Persona, tipo: DayType, r: Reglas): Min {
  * (ver excel.ts); la prueba de coherencia compara ambos.
  */
 export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, aplica: boolean): DiaCalculo {
-  const z: DiaCalculo = { trabajado: 0, favor: 0, contra: 0, compensado: 0, enFeriado: 0, pendiente: false, alerta: false, falta: false };
+  const z: DiaCalculo = { trabajado: 0, extra1: 0, extra2: 0, enFeriado: 0, contra: 0, compensado: 0, pendiente: false, alerta: false, falta: false };
   if (!aplica) return z;
   const m = d.motivo.trim().toLowerCase();
   const e = d.entrada;
@@ -184,10 +188,7 @@ export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, a
   }
   if (!laborable) {
     z.pendiente = xor;
-    if (ambos && s! > e!) {
-      z.favor = Math.round((s! - e!) * r.factorFeriado);
-      z.enFeriado = z.favor;
-    }
+    if (ambos && s! > e!) z.enFeriado = s! - e!;
     return z;
   }
 
@@ -202,8 +203,11 @@ export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, a
   const fin = tipo === 'SAB' ? p.salidaSab : p.salidaLV;
   const extrasDesde = tipo === 'SAB' ? p.salidaSab : p.extrasDesdeLV;
   if (m !== 'falta') {
-    if (s != null && s >= extrasDesde + r.margenExtras) z.favor += s - extrasDesde;
-    if (e != null && p.tempranoAntesDe != null && e < p.tempranoAntesDe && e < p.entrada) z.favor += p.entrada - e;
+    let ext = 0;
+    if (s != null && s >= extrasDesde + r.margenExtras) ext += s - extrasDesde;
+    if (e != null && p.tempranoAntesDe != null && e < p.tempranoAntesDe && e < p.entrada) ext += p.entrada - e;
+    z.extra1 = Math.min(ext, r.tramo1Min);
+    z.extra2 = ext - z.extra1;
   }
 
   if (p.descuenta) {
@@ -217,4 +221,27 @@ export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, a
     else z.contra = faltan;
   }
   return z;
+}
+
+export interface Neto {
+  /** Extras que quedan para pagar después de descontar las compensadas. */
+  neto1: Min;
+  neto2: Min;
+}
+
+/**
+ * Descuenta las horas compensadas del período de las extras de los primeros días
+ * (en orden de fecha y, dentro de cada día, primero las del 35%).
+ * Devuelve lo que queda por día y las compensadas que no alcanzaron a cubrirse (nos debe).
+ */
+export function descontarCompensadas(dias: { extra1: Min; extra2: Min }[], compensadas: Min): { netos: Neto[]; nosDebe: Min } {
+  let resto = compensadas;
+  const netos = dias.map((d) => {
+    const u2 = Math.min(d.extra2, resto);
+    resto -= u2;
+    const u1 = Math.min(d.extra1, resto);
+    resto -= u1;
+    return { neto1: d.extra1 - u1, neto2: d.extra2 - u2 };
+  });
+  return { netos, nosDebe: resto };
 }

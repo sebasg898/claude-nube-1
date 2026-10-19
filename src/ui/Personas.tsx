@@ -76,7 +76,7 @@ export function Personas({ config, setConfig, errores }: Props) {
             <table className="text-sm">
               <thead>
                 <tr className="bg-qalen text-left text-xs text-white">
-                  {['Activa', 'Nombre corto', 'Nombre en el reloj', 'Empresa', 'Horas / semana', 'Entrada', 'Salida L-V', 'Salida sáb.', 'Extras desde (L-V)', 'Llegar temprano cuenta si llega antes de', 'Descuenta tardanzas y salidas', 'Reparto', 'Fecha de ingreso'].map((t) => (
+                  {['Activa', 'Nombre corto', 'Nombre en el reloj', 'Empresa', 'Horas / semana', 'Entrada', 'Salida L-V', 'Salida sáb.', 'Extras desde (L-V)', 'Valor hora (S/)', 'Descuenta tardanzas y salidas', 'Reparto', 'Fecha de ingreso'].map((t) => (
                     <th key={t} className="p-2 align-bottom">{t}</th>
                   ))}
                 </tr>
@@ -93,7 +93,10 @@ export function Personas({ config, setConfig, errores }: Props) {
                     <Hora v={p.salidaLV} on={(v) => v != null && setP(p.id, { salidaLV: v })} />
                     <Hora v={p.salidaSab} on={(v) => v != null && setP(p.id, { salidaSab: v })} />
                     <Hora v={p.extrasDesdeLV} on={(v) => v != null && setP(p.id, { extrasDesdeLV: v })} />
-                    <Hora v={p.tempranoAntesDe} vacio on={(v) => setP(p.id, { tempranoAntesDe: v })} />
+                    <td className="p-1">
+                      <input type="number" className={`w-20 ${p.activo && !(p.valorHora > 0) ? 'bg-yellow-200' : ''}`} min={0} step={0.01} value={p.valorHora || ''} placeholder="0.00"
+                        title="Valor de una hora normal en soles (sueldo mensual ÷ 240)" onChange={(e) => setP(p.id, { valorHora: Number(e.target.value) || 0 })} />
+                    </td>
                     <td className="p-1 text-center"><input type="checkbox" checked={p.descuenta} onChange={(e) => setP(p.id, { descuenta: e.target.checked })} /></td>
                     <td className="p-1 text-center"><input type="checkbox" checked={p.reparto} onChange={(e) => setP(p.id, { reparto: e.target.checked })} /></td>
                     <td className="p-1"><input type="date" value={p.fechaIngreso ?? ''} onChange={(e) => setP(p.id, { fechaIngreso: e.target.value || null })} /></td>
@@ -102,7 +105,8 @@ export function Personas({ config, setConfig, errores }: Props) {
               </tbody>
             </table>
             <p className="mt-2 text-xs text-stone-500">
-              “Llegar temprano…” vacío = llegar antes no suma. “Extras desde” sirve para casos especiales (p. ej. medio tiempo que sale 12:00 pero sus extras se cuentan desde las 18:00).
+              Valor hora = sueldo mensual ÷ 240 (30 días × 8 h). También se puede corregir en el Resumen del Excel. “Extras desde” sirve para casos especiales
+              (p. ej. medio tiempo que sale 12:00 pero sus extras se cuentan desde las 18:00).
             </p>
           </div>
         )}
@@ -115,15 +119,25 @@ export function Personas({ config, setConfig, errores }: Props) {
             <Regla t="Margen para extras (min)" ayuda="Las extras cuentan si sale este tiempo o más después de su hora. 20 = desde las 18:20.">
               <input type="number" className="w-20" min={0} max={120} value={r.margenExtras} onChange={(e) => setR({ margenExtras: Number(e.target.value) })} />
             </Regla>
-            <Regla t="Tardanza que resta (min)" ayuda="Solo se resta de la bolsa si llega tarde por este tiempo o más. 0 = toda tardanza resta.">
+            <Regla t="Tardanza mínima (min)" ayuda="La tardanza cuenta como hora en contra si es de este tiempo o más. 0 = toda tardanza cuenta.">
               <input type="number" className="w-20" min={0} max={600} value={r.tardanzaDesde} onChange={(e) => setR({ tardanzaDesde: Number(e.target.value) })} />
             </Regla>
-            <Regla t="Almuerzo L-V (min)" ayuda="Se descuenta de las horas trabajadas (no de la bolsa).">
+            <Regla t="Almuerzo L-V (min)" ayuda="Se descuenta de las horas trabajadas.">
               <input type="number" className="w-20" min={0} max={180} value={r.almuerzoMin} onChange={(e) => setR({ almuerzoMin: Number(e.target.value) })} />
             </Regla>
-            <Regla t="Factor domingo / feriado" ayuda="1 = cada hora suma 1 hora; 2 = suma doble.">
-              <input type="number" className="w-20" min={0} max={3} step={0.25} value={r.factorFeriado} onChange={(e) => setR({ factorFeriado: Number(e.target.value) })} />
+            <Regla t="Horas del primer recargo" ayuda="Cada día, estas primeras horas extras van al primer recargo; las demás, al segundo. Ley: 2 horas.">
+              <input type="number" className="w-20" min={0} max={10} step={0.5} value={r.tramo1Min / 60} onChange={(e) => setR({ tramo1Min: Math.round(Number(e.target.value) * 60) })} />
             </Regla>
+            <Regla t="Primer recargo" ayuda="Multiplicador del valor hora. Ley: mínimo 1.25 (25%).">
+              <input type="number" className="w-20" min={1} max={4} step={0.05} value={r.recargo1} onChange={(e) => setR({ recargo1: Number(e.target.value) })} />
+            </Regla>
+            <Regla t="Segundo recargo" ayuda="Desde la 3.ª hora extra del día. Ley: mínimo 1.35 (35%).">
+              <input type="number" className="w-20" min={1} max={4} step={0.05} value={r.recargo2} onChange={(e) => setR({ recargo2: Number(e.target.value) })} />
+            </Regla>
+            <Regla t="Recargo domingo / feriado" ayuda="Horas trabajadas en domingo o feriado sin descanso sustituto. Ley: 2.00 (100%).">
+              <input type="number" className="w-20" min={1} max={4} step={0.05} value={r.recargoFeriado} onChange={(e) => setR({ recargoFeriado: Number(e.target.value) })} />
+            </Regla>
+            <p className="text-xs text-amber-700">Los recargos son los mínimos de ley (D.S. 007-2002-TR). Confírmalos con el contador.</p>
           </div>
         </div>
 

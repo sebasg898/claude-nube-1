@@ -30,6 +30,9 @@ export function Procesar(p: Props) {
   const input = useRef<HTMLInputElement>(null);
 
   const pendientes = p.casos.filter((c) => c.caso.faltaDato).length;
+  const pct = (f: number) => `${Math.round((f - 1) * 100)}%`;
+  const pct1 = pct(p.config.reglas.recargo1), pct2 = pct(p.config.reglas.recargo2), pctF = pct(p.config.reglas.recargoFeriado);
+  const sinValorHora = p.mes?.filas.filter((f) => !(f.persona.valorHora > 0)).map((f) => f.persona.alias) ?? [];
   const paraMirar = p.casos.length - pendientes;
 
   function soltar(e: React.DragEvent) {
@@ -117,12 +120,15 @@ export function Procesar(p: Props) {
                   <tr className="bg-qalen text-left text-xs uppercase text-white">
                     <th className="p-2">Nombre</th>
                     <th className="p-2 text-right">Faltas</th>
-                    <th className="p-2 text-right">Trabajadas</th>
-                    <th className="p-2 text-right">Base del mes</th>
-                    <th className="p-2 text-right">A favor</th>
+                    <th className="p-2 text-right">Extras {pct1}</th>
+                    <th className="p-2 text-right">Extras {pct2}</th>
+                    <th className="p-2 text-right">Compen&shy;sadas</th>
+                    <th className="p-2 text-right">A pagar {pct1}</th>
+                    <th className="p-2 text-right">A pagar {pct2}</th>
+                    <th className="p-2 text-right">Dom./fer. {pctF}</th>
+                    <th className="p-2 text-right">Total S/</th>
+                    <th className="p-2 text-right">Nos debe</th>
                     <th className="p-2 text-right">En contra</th>
-                    <th className="p-2 text-right">Compensadas</th>
-                    <th className="p-2 text-right">Saldo del mes</th>
                     <th className="p-2 text-center">Por completar</th>
                     <th className="p-2" />
                   </tr>
@@ -135,19 +141,24 @@ export function Procesar(p: Props) {
                         <tr className="cursor-pointer border-b border-stone-200 hover:bg-stone-50" onClick={() => setAbierto(ab ? null : f.persona.id)}>
                           <td className="p-2 font-semibold">{f.persona.alias}<span className="ml-2 text-xs font-normal text-stone-400">{f.persona.empresa}</span></td>
                           <td className={`p-2 text-right ${f.tot.faltas ? 'font-bold text-red-700' : 'text-stone-300'}`}>{f.tot.faltas || '—'}</td>
-                          <td className="p-2 text-right">{fmtDur(f.tot.trabajado)}</td>
-                          <td className="p-2 text-right text-stone-500">{fmtDur(f.tot.base)}</td>
-                          <td className="p-2 text-right font-semibold text-green-700">{fmtDur(f.tot.favor)}</td>
-                          <td className="p-2 text-right font-semibold text-red-700">{fmtDur(f.tot.contra)}</td>
-                          <td className="p-2 text-right font-semibold text-purple-700">{fmtDur(f.tot.compensado)}</td>
-                          <td className={`p-2 text-right font-bold ${f.tot.saldo < 0 ? 'bg-red-50 text-red-700' : f.tot.saldo > 0 ? 'bg-green-50 text-green-700' : ''}`}>{saldoTxt(f.tot.saldo)}</td>
+                          <td className="p-2 text-right text-green-700">{hm(f.tot.extra1)}</td>
+                          <td className="p-2 text-right text-green-700">{hm(f.tot.extra2)}</td>
+                          <td className="p-2 text-right font-semibold text-purple-700">{hm(f.tot.compensado)}</td>
+                          <td className="p-2 text-right font-semibold text-green-800">{hm(f.tot.neto1)}</td>
+                          <td className="p-2 text-right font-semibold text-green-800">{hm(f.tot.neto2)}</td>
+                          <td className="p-2 text-right font-semibold text-sky-800">{hm(f.tot.enFeriado)}</td>
+                          <td className="p-2 text-right font-bold">
+                            {f.persona.valorHora > 0 ? <span className="text-green-800">{soles(f.tot.monto)}</span> : <span className="rounded bg-yellow-200 px-1 text-xs font-semibold text-amber-900" title="Falta el valor hora (Personas y reglas o Resumen del Excel)">sin valor hora</span>}
+                          </td>
+                          <td className="p-2 text-right font-bold text-red-700">{hm(f.tot.nosDebe)}</td>
+                          <td className="p-2 text-right text-red-700">{hm(f.tot.contra)}</td>
                           <td className="p-2 text-center">{f.tot.pendientes ? <span className="rounded bg-yellow-300 px-2 font-bold">{f.tot.pendientes}</span> : <span className="text-green-700">✔</span>}</td>
-                          <td className="p-2 text-right text-stone-400">{ab ? '▲' : '▼ ver días'}</td>
+                          <td className="p-2 text-right text-stone-400">{ab ? '▲' : '▼ días'}</td>
                         </tr>
                         {ab && (
                           <tr>
-                            <td colSpan={10} className="bg-stone-50 p-2">
-                              <DetallePersona fila={f} />
+                            <td colSpan={13} className="bg-stone-50 p-2">
+                              <DetallePersona fila={f} pct1={pct1} pct2={pct2} />
                             </td>
                           </tr>
                         )}
@@ -157,7 +168,9 @@ export function Procesar(p: Props) {
                 </tbody>
               </table>
               <p className="mt-2 text-xs text-stone-500">
-                Saldo del mes = a favor − en contra − compensadas. Los días por completar cuentan como 0 hasta que se llenen en el Excel.
+                Cada día, las primeras {p.config.reglas.tramo1Min / 60} h extras van al {pct1} y el resto al {pct2}. Las compensadas se descuentan de las extras de los
+                primeros días (primero las del {pct2}); si no alcanzan, aparece en “Nos debe”. Las horas en contra van aparte. Los días por completar cuentan como 0
+                hasta que se llenen en el Excel.
               </p>
             </div>
           </section>
@@ -174,6 +187,12 @@ export function Procesar(p: Props) {
                 <p className="font-semibold">Antes de descargar, corrige esto en “Personas y reglas”:</p>
                 <ul className="ml-5 list-disc">{p.erroresConfig.map((e, i) => <li key={i}>{e}</li>)}</ul>
                 <button className="mt-2 font-semibold underline" onClick={p.irAPersonas}>Ir a Personas y reglas</button>
+              </Caja>
+            )}
+            {sinValorHora.length > 0 && (
+              <Caja tipo="aviso">
+                Falta el valor hora de: <b>{sinValorHora.join(', ')}</b>. Sin él no se calcula el total en soles. Puedes ponerlo en{' '}
+                <button className="font-semibold underline" onClick={p.irAPersonas}>Personas y reglas</button> o después en el Resumen del Excel (celdas amarillas).
               </Caja>
             )}
             {errorDescarga && <Caja tipo="error">{errorDescarga}</Caja>}
@@ -207,7 +226,7 @@ export function Procesar(p: Props) {
   );
 }
 
-function DetallePersona({ fila }: { fila: Mes['filas'][number] }) {
+function DetallePersona({ fila, pct1, pct2 }: { fila: Mes['filas'][number]; pct1: string; pct2: string }) {
   return (
     <table className="w-full text-xs">
       <thead>
@@ -217,7 +236,9 @@ function DetallePersona({ fila }: { fila: Mes['filas'][number] }) {
           <th className="p-1">Entrada</th>
           <th className="p-1">Salida</th>
           <th className="p-1 text-right">Trabajado</th>
-          <th className="p-1 text-right">A favor</th>
+          <th className="p-1 text-right">Extra {pct1}</th>
+          <th className="p-1 text-right">Extra {pct2}</th>
+          <th className="p-1 text-right">Dom./fer.</th>
           <th className="p-1 text-right">En contra</th>
           <th className="p-1 text-right">Compensadas</th>
           <th className="p-1">Nota</th>
@@ -234,9 +255,11 @@ function DetallePersona({ fila }: { fila: Mes['filas'][number] }) {
               <td className={`p-1 font-mono ${falta && d.entrada == null && d.aplica ? 'bg-yellow-300' : ''}`}>{fmtHHMM(d.entrada)}</td>
               <td className={`p-1 font-mono ${falta && d.salida == null && d.aplica ? 'bg-yellow-300' : ''}`}>{fmtHHMM(d.salida)}</td>
               <td className="p-1 text-right font-mono">{d.calc.trabajado ? fmtDur(d.calc.trabajado) : ''}</td>
-              <td className="p-1 text-right font-mono text-green-700">{d.calc.favor ? fmtDur(d.calc.favor) : ''}</td>
-              <td className="p-1 text-right font-mono text-red-700">{d.calc.contra ? fmtDur(d.calc.contra) : ''}</td>
-              <td className="p-1 text-right font-mono text-purple-700">{d.calc.compensado ? fmtDur(d.calc.compensado) : ''}</td>
+              <td className="p-1 text-right font-mono text-green-700">{hm(d.calc.extra1)}</td>
+              <td className="p-1 text-right font-mono text-green-800">{hm(d.calc.extra2)}</td>
+              <td className="p-1 text-right font-mono text-sky-800">{hm(d.calc.enFeriado)}</td>
+              <td className="p-1 text-right font-mono text-red-700">{hm(d.calc.contra)}</td>
+              <td className="p-1 text-right font-mono text-purple-700">{hm(d.calc.compensado)}</td>
               <td className="p-1 text-stone-600">{!d.aplica ? 'Antes de su fecha de ingreso' : d.casos.map((c) => c.mensaje + (c.sugerencia ? ` (sugerencia: ${c.sugerencia})` : '')).join(' ')}</td>
             </tr>
           );
@@ -246,9 +269,13 @@ function DetallePersona({ fila }: { fila: Mes['filas'][number] }) {
   );
 }
 
-function saldoTxt(m: number): string {
-  if (m === 0) return '0:00';
-  return m > 0 ? `+${fmtDur(m)} le debemos` : `−${fmtDur(-m)} nos debe`;
+/** h:mm, vacío si es cero. */
+function hm(m: number): string {
+  return m ? fmtDur(m) : '';
+}
+
+function soles(n: number): string {
+  return `S/ ${n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function Paso({ n, titulo }: { n: number; titulo: string }) {

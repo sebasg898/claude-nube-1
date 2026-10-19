@@ -1,7 +1,7 @@
 import { corteSugerido, dayType, type DayType } from './calendar';
-import { personaNueva, type Config, type Persona } from './config';
+import { personaNueva, type Config, type Persona, type Reglas } from './config';
 import type { Reporte } from './parser';
-import { calcularDia, clasificar, type Caso, type Clasificacion, type DiaCalculo } from './rules';
+import { calcularDia, clasificar, descontarCompensadas, type Caso, type Clasificacion, type DiaCalculo, type Neto } from './rules';
 import { daysBetween, fmtHHMM, weekday, type ISODate, type Min } from './time';
 
 export interface Dia {
@@ -14,13 +14,34 @@ export interface Dia {
   salida: Min | null;
   motivo: string;
   calc: DiaCalculo;
+  /** Extras que quedan por pagar ese día después de descontar las compensadas. */
+  neto: Neto;
   casos: Caso[];
 }
 
 export interface FilaPersona {
   persona: Persona;
   dias: Dia[];
-  tot: { trabajado: Min; base: Min; favor: Min; contra: Min; compensado: Min; enFeriado: Min; pendientes: number; faltas: number; dias: number; saldo: Min };
+  tot: Totales;
+}
+
+export interface Totales {
+  trabajado: Min;
+  base: Min;
+  extra1: Min;
+  extra2: Min;
+  compensado: Min;
+  neto1: Min;
+  neto2: Min;
+  enFeriado: Min;
+  /** Compensadas que no alcanzaron a cubrirse con extras: horas que la persona debe. */
+  nosDebe: Min;
+  contra: Min;
+  pendientes: number;
+  faltas: number;
+  dias: number;
+  /** Monto a pagar en soles (extras netas y domingo/feriado). */
+  monto: number;
 }
 
 export interface Mes {
@@ -90,10 +111,11 @@ export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
       const salida = aplica ? clas.salida : null;
       const calc = calcularDia({ entrada, salida, motivo: '' }, tipo, p, cfg.reglas, aplica);
       const casos = [...clas.casos];
-      if (calc.favor - calc.enFeriado > 180) casos.push({ tipo: 'extras_altas', faltaDato: false, mensaje: `Más de 3 horas a favor en el día (${Math.floor(calc.favor / 60)} h ${calc.favor % 60} min). Solo para revisar.` });
-      return { fecha, tipo, aplica, reloj: clas.marcas.map(fmtHHMM).join(' '), clas, entrada, salida, motivo: '', calc, casos };
+      const ext = calc.extra1 + calc.extra2;
+      if (ext > 180) casos.push({ tipo: 'extras_altas', faltaDato: false, mensaje: `Más de 3 horas extras en el día (${Math.floor(ext / 60)} h ${ext % 60} min). Solo para revisar.` });
+      return { fecha, tipo, aplica, reloj: clas.marcas.map(fmtHHMM).join(' '), clas, entrada, salida, motivo: '', calc, neto: { neto1: 0, neto2: 0 }, casos };
     });
-    return { persona: p, dias, tot: totales(p, dias) };
+    return { persona: p, dias, tot: totales(p, dias, cfg.reglas) };
   });
 
   const avisos: string[] = [];
@@ -101,21 +123,36 @@ export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
   return { inicio: rep.inicio, hasta: fin, finReporte: rep.fin, fechas, filas, avisos };
 }
 
-export function totales(p: Persona, dias: Dia[]): FilaPersona['tot'] {
-  const t = { trabajado: 0, base: 0, favor: 0, contra: 0, compensado: 0, enFeriado: 0, pendientes: 0, faltas: 0, dias: 0, saldo: 0 };
+/** Totales de una persona. También reparte las compensadas sobre las extras (guarda el neto de cada día). */
+export function totales(p: Persona, dias: Dia[], r: Reglas): Totales {
+  const t: Totales = { trabajado: 0, base: 0, extra1: 0, extra2: 0, compensado: 0, neto1: 0, neto2: 0, enFeriado: 0, nosDebe: 0, contra: 0, pendientes: 0, faltas: 0, dias: 0, monto: 0 };
   for (const d of dias) {
     t.trabajado += d.calc.trabajado;
+    t.extra1 += d.calc.extra1;
+    t.extra2 += d.calc.extra2;
     t.compensado += d.calc.compensado;
-    if (d.aplica && (d.tipo === 'LV' || d.tipo === 'SAB')) t.base += baseDiaria(p);
-    t.favor += d.calc.favor;
-    t.contra += d.calc.contra;
     t.enFeriado += d.calc.enFeriado;
+    t.contra += d.calc.contra;
+    if (d.aplica && (d.tipo === 'LV' || d.tipo === 'SAB')) t.base += baseDiaria(p);
     if (d.calc.pendiente) t.pendientes++;
     if (d.calc.falta) t.faltas++;
     if (d.aplica && d.entrada != null) t.dias++;
   }
-  t.saldo = t.favor - t.contra - t.compensado;
+  const { netos, nosDebe } = descontarCompensadas(dias.map((d) => d.calc), t.compensado);
+  dias.forEach((d, i) => {
+    d.neto = netos[i];
+    t.neto1 += netos[i].neto1;
+    t.neto2 += netos[i].neto2;
+  });
+  t.nosDebe = nosDebe;
+  t.monto = montoSoles(t, p.valorHora, r);
   return t;
+}
+
+/** Igual que la fórmula del Excel: ROUND(horas × valor hora × recargo, 2). */
+export function montoSoles(t: Pick<Totales, 'neto1' | 'neto2' | 'enFeriado'>, valorHora: number, r: Reglas): number {
+  const v = (t.neto1 / 60) * valorHora * r.recargo1 + (t.neto2 / 60) * valorHora * r.recargo2 + (t.enFeriado / 60) * valorHora * r.recargoFeriado;
+  return Math.round(v * 100) / 100;
 }
 
 /** Horas base por día laborable (lunes a sábado): horas semanales ÷ 6. */
