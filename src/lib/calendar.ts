@@ -1,4 +1,4 @@
-import { addDays, daysBetween, isoFromParts, parseISO, weekday, type ISODate } from './time';
+import { addDays, daysBetween, isoFromParts, weekday, type ISODate } from './time';
 
 export type DayType = 'LV' | 'SAB' | 'DOM' | 'FER';
 
@@ -49,23 +49,6 @@ export function feriadosPeru(y: number): { fecha: ISODate; nombre: string }[] {
     f(12, 9, 'Batalla de Ayacucho'),
     f(12, 25, 'Navidad'),
   ];
-}
-
-/** Último día hábil (lunes a viernes, no feriado) del mes de la fecha dada. */
-export function ultimoDiaHabil(date: ISODate, feriados: Set<ISODate>): ISODate {
-  const { y, mo } = parseISO(date);
-  const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
-  for (let d = last; d >= 1; d--) {
-    const iso = isoFromParts(y, mo, d);
-    if (dayType(iso, feriados) === 'LV') return iso;
-  }
-  return isoFromParts(y, mo, last);
-}
-
-/** Corte por defecto: el último día hábil del mes, o el último día del reporte si llega antes. */
-export function corteSugerido(inicio: ISODate, fin: ISODate, feriados: Set<ISODate>): ISODate {
-  const udh = ultimoDiaHabil(inicio, feriados);
-  return fin < udh ? fin : udh;
 }
 
 export { daysBetween };

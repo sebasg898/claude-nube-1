@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { corteSugerido, dayType, feriadosPeru, ultimoDiaHabil } from '../src/lib/calendar';
+import { dayType, feriadosPeru } from '../src/lib/calendar';
+import { corteMes } from '../src/lib/model';
+import { nombrePeriodo } from '../src/lib/time';
 import { ErrorReporte, interpretarFilas, leerReporte } from '../src/lib/parser';
 import { reporteSintetico } from './sintetico';
 
@@ -36,10 +38,11 @@ describe('calendario', () => {
     expect(dayType('2026-09-06', fer)).toBe('DOM');
     expect(dayType('2026-10-08', fer)).toBe('FER');
   });
-  it('corte: último día hábil, o fin del reporte si llega antes', () => {
-    expect(ultimoDiaHabil('2026-09-01', fer)).toBe('2026-09-30');
-    expect(ultimoDiaHabil('2026-10-01', fer)).toBe('2026-10-30');
-    expect(corteSugerido('2026-09-01', '2026-09-26', fer)).toBe('2026-09-26');
-    expect(corteSugerido('2026-09-01', '2026-10-02', fer)).toBe('2026-09-30');
+  it('corte: todo el rango del reporte, aunque abarque varios meses', () => {
+    const rep = interpretarFilas([['Periodo:', '2026-09-28 ~ 2026-10-15'], [28, 29, 30, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], ['ID:', '5', 'Nombre:', 'A'], []]);
+    expect(corteMes(rep)).toBe('2026-10-15');
+    expect(nombrePeriodo('2026-09-01', '2026-09-26')).toBe('SETIEMBRE 2026');
+    expect(nombrePeriodo('2026-09-28', '2026-10-15')).toBe('SETIEMBRE – OCTUBRE 2026');
+    expect(nombrePeriodo('2026-12-20', '2027-01-10')).toBe('DICIEMBRE 2026 – ENERO 2027');
   });
 });

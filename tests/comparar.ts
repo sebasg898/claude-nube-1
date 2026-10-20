@@ -36,6 +36,8 @@ export function compararConPagina(x: XLSX.WorkBook, mes: Mes) {
       const filas = ['trabajado', 'extra1', 'extra2', 'feriado', 'contra', 'compensado', 'neto1', 'neto2'] as const;
       const esperado = [d.calc.trabajado, d.calc.extra1, d.calc.extra2, d.calc.enFeriado, d.calc.contra, d.calc.compensado, d.neto.neto1, d.neto.neto2];
       expect([fp.persona.alias, d.fecha, ...filas.map((k) => min(asis, b + FILA[k], c))]).toEqual([fp.persona.alias, d.fecha, ...esperado]);
+      expect([fp.persona.alias, d.fecha, num(asis, b + FILA.soles1, c), num(asis, b + FILA.soles2, c), num(asis, b + FILA.solesTotal, c)])
+        .toEqual([fp.persona.alias, d.fecha, d.soles.s1, d.soles.s2, d.soles.total]);
     });
   });
 }

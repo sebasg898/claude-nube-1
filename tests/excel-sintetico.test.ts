@@ -7,7 +7,7 @@ import * as XLSX from 'xlsx';
 import { describe, expect, it } from 'vitest';
 import { configInicial } from '../src/lib/config';
 import { excelABuffer, FILA, filaBloque, generarExcel, HOJAS, PRIMERA_COL_DIA, RES } from '../src/lib/excel';
-import { construirMes, sincronizarPersonas } from '../src/lib/model';
+import { construirMes, corteMes, sincronizarPersonas } from '../src/lib/model';
 import { leerReporte } from '../src/lib/parser';
 import { compararConPagina, min, num } from './comparar';
 import { hayLibreOffice, recalcular } from './libreoffice';
@@ -86,9 +86,38 @@ describe.skipIf(!hayLibreOffice)('Excel generado (datos sintéticos)', () => {
     // Monto de Ana = netos × valor hora × recargo
     const n1 = min(res, r0, RES.neto1), n2 = min(res, r0, RES.neto2), fer = min(res, r0, RES.feriado);
     expect(num(res, r0, RES.valorHora)).toBe(10.47);
-    const pago = Math.round(((n1 / 60) * 10.47 * 1.25 + (n2 / 60) * 10.47 * 1.35 + (fer / 60) * 10.47 * 2) * 100) / 100;
+    // El pago es la suma de los soles de cada día (cada parte redondeada a céntimos)
+    const asisCol = (fecha: string) => col(fecha);
+    const diaTotal = (fecha: string) => num(asis, filaBloque(0) + FILA.solesTotal, asisCol(fecha));
+    expect(num(asis, filaBloque(0) + FILA.soles2, col('2026-09-10'))).toBe(Math.round((72 / 60) * 10.47 * 1.35 * 100) / 100);
+    expect(num(asis, filaBloque(0) + FILA.soles1, col('2026-09-10'))).toBe(Math.round(2 * 10.47 * 1.25 * 100) / 100);
+    expect(diaTotal('2026-09-06')).toBe(Math.round(4 * 10.47 * 2 * 100) / 100); // domingo: 4 h al 100%
+    expect(diaTotal('2026-09-02')).toBe(0); // sus extras se usaron para compensar
+    const pago = mes.fechas.reduce((acc, f) => acc + diaTotal(f.fecha), 0);
     expect(num(res, r0, RES.monto)).toBeCloseTo(pago, 2);
     expect(num(res, r0, RES.totalMes)).toBeCloseTo(2400 + 113 + pago, 2);
+    expect(n1 + n2 + fer).toBeGreaterThan(0);
     expect(num(res, r0, RES.pendientes)).toBe(a.pendientes - 1);
+  });
+});
+
+describe.skipIf(!hayLibreOffice)('Reporte que abarca dos meses', () => {
+  const rep = leerReporte(reporteSintetico([
+    { id: '20', nombre: 'Carla Tres', dias: { '2026-09-29': '08:2519:00', '2026-09-30': '08:30', '2026-10-01': '08:2821:30', '2026-10-03': '08:2513:00' } },
+  ], '2026-09-28', '2026-10-03'));
+  const { config: cfg } = sincronizarPersonas(rep, configInicial(2026));
+  cfg.personas[0].sueldo = 2400;
+  const mes = construirMes(rep, cfg, corteMes(rep));
+
+  it('analiza todo el rango y el Excel coincide con la página', async () => {
+    expect(mes.fechas.map((f) => f.fecha)).toEqual(['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03']);
+    const t = mes.filas[0].tot;
+    expect([t.extra1, t.extra2]).toEqual([60 + 120 + 60, 90]); // 29/09: 1 h; 01/10: 3:30 (2 h + 1:30); sáb 03/10: 1 h
+    const dir = mkdtempSync(join(tmpdir(), 'qalen-2m-'));
+    const f = join(dir, 'a.xlsx');
+    writeFileSync(f, Buffer.from(await excelABuffer(await generarExcel(mes, cfg, rep, { sinResultados: true }))));
+    const x = XLSX.read(readFileSync(recalcular(f)));
+    compararConPagina(x, mes);
+    expect(String(x.Sheets[HOJAS.asis]['D1']?.v)).toBe('ASISTENCIA SETIEMBRE – OCTUBRE 2026');
   });
 });

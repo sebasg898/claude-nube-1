@@ -1,4 +1,4 @@
-import { corteSugerido, dayType, type DayType } from './calendar';
+import { dayType, type DayType } from './calendar';
 import { personaNueva, type Config, type Persona, type Reglas } from './config';
 import type { Reporte } from './parser';
 import { calcularDia, clasificar, descontarCompensadas, type Caso, type Clasificacion, type DiaCalculo, type Neto } from './rules';
@@ -16,8 +16,23 @@ export interface Dia {
   calc: DiaCalculo;
   /** Extras que quedan por pagar ese día después de descontar las compensadas. */
   neto: Neto;
+  /** Pago en soles de ese día (con el valor hora elegido). */
+  soles: SolesDia;
   casos: Caso[];
 }
+
+export interface SolesDia {
+  /** Extras al primer recargo (25%). */
+  s1: number;
+  /** Extras al segundo recargo (35%). */
+  s2: number;
+  /** Domingo / feriado (100%). */
+  sf: number;
+  /** Total del día. */
+  total: number;
+}
+
+const SIN_SOLES: SolesDia = { s1: 0, s2: 0, sf: 0, total: 0 };
 
 export interface FilaPersona {
   persona: Persona;
@@ -42,7 +57,7 @@ export interface Totales {
   dias: number;
   /** Valor hora usado (según cómo esté configurada la persona). */
   valorHora: number;
-  /** Pago de horas extras en soles (extras netas y domingo/feriado). */
+  /** Pago de horas extras en soles: suma de los totales de cada día (extras netas y domingo/feriado). */
   monto: number;
   /** El pago de extras con cada forma de calcular el valor hora (para comparar). */
   montoOcho: number;
@@ -83,8 +98,9 @@ export function sincronizarPersonas(rep: Reporte, cfg: Config): { config: Config
   return { config: { ...cfg, personas }, avisos };
 }
 
-export function corteMes(rep: Reporte, cfg: Config): ISODate {
-  return corteSugerido(rep.inicio, rep.fin, new Set(cfg.feriados.map((f) => f.fecha)));
+/** Corte por defecto: todo el rango que trae el reporte (aunque abarque varios meses). */
+export function corteMes(rep: Reporte): ISODate {
+  return rep.fin;
 }
 
 export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
@@ -120,7 +136,7 @@ export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
       const casos = [...clas.casos];
       const ext = calc.extra1 + calc.extra2;
       if (ext > 180) casos.push({ tipo: 'extras_altas', faltaDato: false, mensaje: `Más de 3 horas extras en el día (${Math.floor(ext / 60)} h ${ext % 60} min). Solo para revisar.` });
-      return { fecha, tipo, aplica, reloj: clas.marcas.map(fmtHHMM).join(' '), clas, entrada, salida, motivo: '', calc, neto: { neto1: 0, neto2: 0 }, casos };
+      return { fecha, tipo, aplica, reloj: clas.marcas.map(fmtHHMM).join(' '), clas, entrada, salida, motivo: '', calc, neto: { neto1: 0, neto2: 0 }, soles: SIN_SOLES, casos };
     });
     return { persona: p, dias, tot: totales(p, dias, cfg.reglas) };
   });
@@ -155,15 +171,29 @@ export function totales(p: Persona, dias: Dia[], r: Reglas): Totales {
     t.neto2 += netos[i].neto2;
   });
   t.nosDebe = nosDebe;
-  t.montoOcho = montoSoles(t, valorHora(p, r, 'ocho'), r);
-  t.montoReales = montoSoles(t, valorHora(p, r, 'reales'), r);
+  // El pago se calcula día por día (igual que en el Excel) y se suma.
+  const pagoCon = (vh: number) => redondear2(dias.reduce((acc, d) => acc + solesDia(d, vh, r).total, 0));
   t.valorHora = valorHora(p, r, p.valorHoraSegun);
+  for (const d of dias) d.soles = solesDia(d, t.valorHora, r);
+  t.montoOcho = pagoCon(valorHora(p, r, 'ocho'));
+  t.montoReales = pagoCon(valorHora(p, r, 'reales'));
   t.monto = p.valorHoraSegun === 'reales' ? t.montoReales : t.montoOcho;
   t.totalMes = redondear2(p.sueldo + asignacion(p, r) + t.monto);
   return t;
 }
 
-const redondear2 = (v: number) => Math.round(v * 100) / 100;
+/** Redondeo a céntimos como ROUND(x; 2) de Excel (evita errores de coma flotante, p. ej. 1.005 → 1.01). */
+export function redondear2(v: number): number {
+  return Math.round(Number((v * 100).toPrecision(15))) / 100;
+}
+
+/** Pago de un día: cada parte redondeada a céntimos, como las filas "S/" de la hoja Asistencia. */
+export function solesDia(d: Pick<Dia, 'neto' | 'calc'>, vh: number, r: Reglas): SolesDia {
+  const s1 = redondear2((d.neto.neto1 / 60) * vh * r.recargo1);
+  const s2 = redondear2((d.neto.neto2 / 60) * vh * r.recargo2);
+  const sf = redondear2((d.calc.enFeriado / 60) * vh * r.recargoFeriado);
+  return { s1, s2, sf, total: redondear2(s1 + s2 + sf) };
+}
 
 export function asignacion(p: Persona, r: Reglas): number {
   return p.asignacionFamiliar ? r.montoAsignacion : 0;
@@ -179,7 +209,7 @@ export function valorHora(p: Persona, r: Reglas, segun: Persona['valorHoraSegun'
   return redondear2((p.sueldo + asignacion(p, r)) / 30 / horasDia);
 }
 
-/** Igual que la fórmula del Excel: ROUND(horas × valor hora × recargo, 2). */
+/** Pago sobre horas totales, redondeado una sola vez (referencia; el pago real se suma día por día). */
 export function montoSoles(t: Pick<Totales, 'neto1' | 'neto2' | 'enFeriado'>, valorHora: number, r: Reglas): number {
   const v = (t.neto1 / 60) * valorHora * r.recargo1 + (t.neto2 / 60) * valorHora * r.recargo2 + (t.enFeriado / 60) * valorHora * r.recargoFeriado;
   return redondear2(v);

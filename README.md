@@ -7,7 +7,7 @@ falta un dato, y un **Resumen de la bolsa de horas** que se recalcula solo con f
 ## Para Yasmín (uso)
 
 1. Abre `Control-de-asistencia-QALEN.html` (doble clic; funciona sin internet).
-2. **Procesar mes** → arrastra el `.xls` del reloj. Elige "Calcular hasta el día" (por defecto: último día hábil del mes).
+2. **Procesar mes** → arrastra el `.xls` del reloj. Se analiza todo el rango del reporte (aunque abarque varios meses); se puede elegir un día anterior.
 3. Revisa en pantalla (cada persona se expande día por día) y pulsa **Descargar Excel**.
 4. En el Excel, hoja **Asistencia**: completa lo amarillo (hora o motivo). **Resumen** y **Semanal** se actualizan solos.
 
@@ -18,7 +18,7 @@ Nada sale de la computadora. La configuración (personas y reglas) se guarda en 
 | Hoja | Qué tiene |
 |---|---|
 | Leeme | Cómo usarlo, motivos, horas extras y colores. |
-| Asistencia | Por persona: Reloj · Entrada (verde) · Salida (naranja) · Motivo · Horas trabajadas · Extra 25% · Extra 35% · Dom./Feriado · En contra · Compensadas (+2 filas ocultas: extras a pagar después de descontar compensadas). Columnas = días, con líneas por semana. |
+| Asistencia | Por persona: Reloj · Entrada (verde) · Salida (naranja) · Motivo · Horas trabajadas · Extra 25% · Extra 35% · Dom./Feriado · En contra · Compensadas · Extra 25% / 35% a pagar (después de descontar compensadas) · **S/ Extra 25% · S/ Extra 35% · S/ Total del día**. Columnas = días, con líneas por semana. |
 | Semanal | Por semana (lunes a sábado): trabajadas, extra 25%, extra 35%, dom./feriado, en contra, compensadas. |
 | Resumen | Faltas · horas trabajadas · base del mes · **extras 25% / 35%** · compensadas · **horas a pagar 25% / 35% / dom.-feriado 100%** · sueldo (editable) · asig. familiar (Sí/No) · valor hora según (8 h / horas reales) · valor hora · **PAGO HORAS EXTRAS** · sueldo + extras · nos debe · horas en contra · datos por completar. Monto de la asignación familiar editable arriba. |
 
@@ -38,7 +38,8 @@ Nada sale de la computadora. La configuración (personas y reglas) se guarda en 
   Jornada de un día completo = horas semanales ÷ 6 (8 h; sábado máx. 3:30).
 - **Valor hora** = (sueldo + asignación familiar si la recibe) ÷ 30 días ÷ 8 h, redondeado a 2 decimales. Para quien no trabaja 8 h diarias
   se puede elegir **"Horas reales"**: ÷ 30 ÷ (horas semanales ÷ 6). La página muestra el pago con ambas formas para comparar.
-- **PAGO HORAS EXTRAS** = (extras 25% netas × 1.25 + extras 35% netas × 1.35 + dom./feriado × 2) × valor hora, redondeado a céntimos.
+- **Soles por día**: S/ 25% = horas 25% a pagar × valor hora × 1.25; S/ 35% = horas 35% a pagar × valor hora × 1.35; total del día = ambas + dom./feriado × valor hora × 2 (cada parte redondeada a céntimos).
+  **PAGO HORAS EXTRAS** = suma de los totales de cada día.
   **Sueldo + extras** = sueldo + asignación + pago de extras (sin descuentos). Recargos y monto de asignación configurables (confirmar con el contador).
 - **Almuerzo** (45 min, solo para horas trabajadas): se descuenta L-V si trabajó más de 5 h y su horario pasa por el mediodía (antes de las 13:00 y después de las 14:00).
 - **Horas base del mes** = días laborables (L-S, sin feriados) × horas semanales ÷ 6.

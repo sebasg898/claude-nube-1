@@ -16,7 +16,7 @@ import ExcelJS from 'exceljs';
 import { MOTIVOS, type Config } from './config';
 import { baseDiaria, type Mes } from './model';
 import type { Reporte } from './parser';
-import { DIAS_CORTO, MESES, ddmm, excelSerial, fmtHHMM, parseISO, weekday } from './time';
+import { DIAS_CORTO, ddmm, excelSerial, fmtHHMM, nombrePeriodo, weekday } from './time';
 
 // ---------- estilo ----------
 const ROJO = 'FFC8102E';
@@ -55,16 +55,18 @@ export function col(n: number): string {
 // ---------- disposición ----------
 export const HOJAS = { leeme: 'Leeme', asis: 'Asistencia', semanal: 'Semanal', resumen: 'Resumen' } as const;
 
-/** Filas dentro del bloque de cada persona en la hoja Asistencia (neto1/neto2 van ocultas). */
+/** Filas dentro del bloque de cada persona en la hoja Asistencia. */
 export const FILA = {
   reloj: 0, entrada: 1, salida: 2, motivo: 3, trabajado: 4, extra1: 5, extra2: 6, feriado: 7, contra: 8, compensado: 9, neto1: 10, neto2: 11,
+  soles1: 12, soles2: 13, solesTotal: 14,
 } as const;
 type Fila = keyof typeof FILA;
-export const ALTO_BLOQUE = 12;
+export const ALTO_BLOQUE = 15;
 export const PRIMERA_FILA_BLOQUE = 10;
 export const PRIMERA_COL_DIA = 3; // C
 const R_DIASEM = 5, R_FECHA = 6, R_TIPO = 7, R_SEMANA = 8;
-const OCULTAS: Fila[] = ['neto1', 'neto2'];
+const FILAS_SOLES: Fila[] = ['soles1', 'soles2', 'solesTotal'];
+const SOLES_DIA = '"S/ "#,##0.00;;""';
 
 export function filaBloque(i: number): number {
   return PRIMERA_FILA_BLOQUE + i * ALTO_BLOQUE;
@@ -98,8 +100,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
   wb.calcProperties.fullCalcOnLoad = true;
   const logoId = op.logoBase64 ? wb.addImage({ base64: op.logoBase64, extension: 'png' }) : null;
 
-  const { y, mo } = parseISO(mes.inicio);
-  const titulo = `${MESES[mo]} ${y}`;
+  const titulo = nombrePeriodo(mes.inicio, mes.hasta);
   const periodo = `del ${ddmm(mes.inicio)} al ${ddmm(mes.hasta)}`;
   const R = cfg.reglas;
   const MARG = R.margenExtras, ALM = R.almuerzoMin, TD1 = Math.max(R.tardanzaDesde, 1), TRAMO = R.tramo1Min;
@@ -111,8 +112,9 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
     reloj: 'Reloj', entrada: 'Entrada', salida: 'Salida', motivo: 'Motivo / Obs.', trabajado: 'Horas trabajadas',
     extra1: `Extra ${P1}`, extra2: `Extra ${P2}`, feriado: 'Dom./Feriado', contra: 'En contra', compensado: 'Compensadas',
     neto1: `Extra ${P1} a pagar`, neto2: `Extra ${P2} a pagar`,
+    soles1: `S/ Extra ${P1}`, soles2: `S/ Extra ${P2}`, solesTotal: 'S/ Total del día',
   };
-  const COLOR_TXT: Partial<Record<Fila, string>> = { extra1: VERDE_TXT, extra2: VERDE_OSC, feriado: AZUL_FER, contra: ROJO_TXT, compensado: MORADO, neto1: VERDE_TXT, neto2: VERDE_OSC };
+  const COLOR_TXT: Partial<Record<Fila, string>> = { extra1: VERDE_TXT, extra2: VERDE_OSC, feriado: AZUL_FER, contra: ROJO_TXT, compensado: MORADO, neto1: VERDE_TXT, neto2: VERDE_OSC, soles1: 'FF7F6000', soles2: 'FF7F6000', solesTotal: 'FF7F6000' };
 
   const leeme = wb.addWorksheet(HOJAS.leeme, { properties: { tabColor: { argb: GRIS_OSC } } });
   const asis = wb.addWorksheet(HOJAS.asis, { properties: { tabColor: { argb: ROJO } } });
@@ -213,7 +215,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       nc.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
       nc.fill = fill(GRIS);
 
-      const colorFila = (k: Fila) => (k === 'entrada' ? VERDE_ENTRADA : k === 'salida' ? NARANJA_SALIDA : k === 'motivo' ? 'FFFFFFFF' : GRIS);
+      const colorFila = (k: Fila) => (k === 'entrada' ? VERDE_ENTRADA : k === 'salida' ? NARANJA_SALIDA : k === 'motivo' ? 'FFFFFFFF' : FILAS_SOLES.includes(k) ? 'FFFFF2CC' : GRIS);
       for (const k of Object.keys(FILA) as Fila[]) {
         for (const c of [2, cEtq2]) {
           const cell = ws.getCell(RF(k), c);
@@ -223,7 +225,8 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
         }
       }
       ws.getRow(RF('reloj')).height = 24;
-      for (const k of OCULTAS) ws.getRow(RF(k)).hidden = true;
+      // Valor hora de la persona (se calcula en el Resumen desde el sueldo)
+      const VH = `'${HOJAS.resumen}'!$${col(RES.valorHora)}$${RES.primeraFila + i}`;
 
       // Parámetros de la persona (valores fijos, columnas ocultas)
       const pars: [number, number][] = [
@@ -320,6 +323,21 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
           cell.alignment = { horizontal: 'center' };
           cell.font = { size: 9, bold: k !== 'trabajado', color: { argb: COLOR_TXT[k] ?? 'FF000000' } };
         }
+        // Soles del día (sobre las extras que quedan después de descontar las compensadas)
+        const sf = `ROUND(${X}${RF('feriado')}*24*${VH}*${R.recargoFeriado},2)`;
+        const soles: [Fila, string, number][] = [
+          ['soles1', `ROUND(${X}${RF('neto1')}*24*${VH}*${R.recargo1},2)`, d.soles.s1],
+          ['soles2', `ROUND(${X}${RF('neto2')}*24*${VH}*${R.recargo2},2)`, d.soles.s2],
+          ['solesTotal', `ROUND(${X}${RF('soles1')}+${X}${RF('soles2')}+${sf},2)`, d.soles.total],
+        ];
+        for (const [k, f, res] of soles) {
+          const cell = ws.getCell(RF(k), c);
+          cell.value = { formula: f, result: res };
+          cell.numFmt = SOLES_DIA;
+          cell.fill = fill(k === 'solesTotal' ? 'FFFFF2CC' : GRIS);
+          cell.alignment = { horizontal: 'center', shrinkToFit: true };
+          cell.font = { size: 8, bold: k === 'solesTotal', color: { argb: COLOR_TXT[k] ?? 'FF000000' } };
+        }
       });
 
       // Totales de la fila
@@ -338,6 +356,10 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
         ['contra', T.contra], ['compensado', T.compensado], ['neto1', T.neto1], ['neto2', T.neto2],
       ];
       for (const [k, v] of totales) tot(k, `SUM(${rangoFila(RF(k))})`, v / 1440, '[h]:mm');
+      const sum = (f: (d: (typeof fp.dias)[number]) => number) => Math.round(fp.dias.reduce((a, d) => a + f(d), 0) * 100) / 100;
+      tot('soles1', `SUM(${rangoFila(RF('soles1'))})`, sum((d) => d.soles.s1), SOLES);
+      tot('soles2', `SUM(${rangoFila(RF('soles2'))})`, sum((d) => d.soles.s2), SOLES);
+      tot('solesTotal', `ROUND(SUM(${rangoFila(RF('solesTotal'))}),2)`, T.monto, SOLES);
       // Datos por completar (conteo de celdas amarillas)
       const Er = rangoFila(RF('entrada')), Sr = rangoFila(RF('salida')), Mr = rangoFila(RF('motivo'));
       const Tr = rangoFila(R_TIPO), Fr = rangoFila(R_FECHA);
@@ -415,6 +437,8 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
         if (c === 1) continue;
         const sal = ws.getCell(r0 + FILA.salida, c);
         sal.border = { ...(sal.border ?? {}), bottom: grueso };
+        const so = ws.getCell(r0 + FILA.soles1, c);
+        so.border = { ...(so.border ?? {}), top: { style: 'thin', color: { argb: 'FF7F6000' } } };
       }
     });
 
@@ -541,7 +565,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
         [RES.asignacion, p.asignacionFamiliar ? 'Sí' : 'No'],
         [RES.segun, p.valorHoraSegun === 'reales' ? SEGUN_REALES : SEGUN_OCHO],
         [RES.valorHora, { formula: `IF(${S(RES.sueldo)}>0,ROUND(${BASE_SOLES}/30/${HORAS_DIA},2),0)`, result: t.valorHora }, SOLES],
-        [RES.monto, { formula: `ROUND(${S(RES.neto1)}*24*${S(RES.valorHora)}*${R.recargo1}+${S(RES.neto2)}*24*${S(RES.valorHora)}*${R.recargo2}+${S(RES.feriado)}*24*${S(RES.valorHora)}*${R.recargoFeriado},2)`, result: t.monto }, SOLES],
+        [RES.monto, { formula: refTot('solesTotal', i), result: t.monto }, SOLES],
         [RES.totalMes, { formula: `ROUND(${BASE_SOLES}+${S(RES.monto)},2)`, result: t.totalMes }, SOLES],
         [RES.nosDebe, { formula: `MAX(${S(RES.compensado)}-${S(RES.extra1)}-${S(RES.extra2)},0)`, result: t.nosDebe / 1440 }, '[h]:mm;;""'],
         [RES.contra, { formula: refTot('contra', i), result: t.contra / 1440 }, '[h]:mm'],
@@ -723,6 +747,7 @@ export async function generarExcel(mes: Mes, cfg: Config, _rep: Reporte, op: Opc
       ['2. Arriba de la hoja dice cuántas faltan. Cuando diga "✔ Todo completo", revisa la hoja "Resumen".'],
       ['3. En "Resumen" revisa el sueldo y la asignación familiar de cada persona (si el sueldo está en amarillo, escríbelo): el valor hora y el pago se calculan solos.'],
       ['4. Si pasas el mouse por una celda gris con triángulo rojo (fila Reloj), verás qué pasó ese día.'],
+      ['5. Debajo de cada persona están los soles de cada día (S/ Extra 25%, S/ Extra 35% y S/ Total del día), ya con las compensadas descontadas.'],
       [''],
       ['Motivos', 'h'],
       ['Vacaciones / Salud: se cuenta como día completo trabajado.'],

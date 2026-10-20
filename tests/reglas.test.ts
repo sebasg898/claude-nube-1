@@ -198,3 +198,13 @@ describe('turno distinto en semana y sábado (caso Victor)', () => {
     expect(valorHora({ ...p, sueldo: 0 }, cfg.reglas, 'ocho')).toBe(0);
   });
 });
+
+describe('soles por día', () => {
+  it('cada parte se redondea a céntimos y se suma', async () => {
+    const { solesDia, redondear2 } = await import('../src/lib/model');
+    const d = { neto: { neto1: 120, neto2: 72 }, calc: { enFeriado: 0 } } as Parameters<typeof solesDia>[0];
+    expect(solesDia(d, 10.47, cfg.reglas)).toEqual({ s1: 26.18, s2: 16.96, sf: 0, total: 43.14 });
+    expect(solesDia({ neto: { neto1: 0, neto2: 0 }, calc: { enFeriado: 240 } } as Parameters<typeof solesDia>[0], 10.47, cfg.reglas).total).toBe(83.76);
+    expect([redondear2(1.005), redondear2(2.675), redondear2(26.175)]).toEqual([1.01, 2.68, 26.18]);
+  });
+});

@@ -75,3 +75,12 @@ export function ddmm(s: ISODate): string {
   const { mo, d } = parseISO(s);
   return `${String(d).padStart(2, '0')}/${String(mo).padStart(2, '0')}`;
 }
+
+/** Nombre del período: "SETIEMBRE 2026", "SETIEMBRE – OCTUBRE 2026" o "DICIEMBRE 2026 – ENERO 2027". */
+export function nombrePeriodo(inicio: ISODate, fin: ISODate): string {
+  const a = parseISO(inicio);
+  const b = parseISO(fin);
+  if (a.y === b.y && a.mo === b.mo) return `${MESES[a.mo]} ${a.y}`;
+  if (a.y === b.y) return `${MESES[a.mo]} – ${MESES[b.mo]} ${a.y}`;
+  return `${MESES[a.mo]} ${a.y} – ${MESES[b.mo]} ${b.y}`;
+}

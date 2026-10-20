@@ -32,7 +32,7 @@ export default function App() {
       setConfig(nueva);
       setReporte(rep);
       setNombreArchivo(f.name);
-      setHasta(corteMes(rep, nueva));
+      setHasta(corteMes(rep));
       setAvisosCarga([...rep.avisos, ...avisos]);
     } catch (e) {
       setReporte(null);

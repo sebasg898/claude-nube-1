@@ -3,7 +3,7 @@ import type { Config } from '../lib/config';
 import { excelABuffer, generarExcel } from '../lib/excel';
 import type { CasoListado, Mes } from '../lib/model';
 import type { Reporte } from '../lib/parser';
-import { DIAS_CORTO, MESES, ddmm, fmtDur, fmtHHMM, parseISO, weekday } from '../lib/time';
+import { DIAS_CORTO, ddmm, fmtDur, fmtHHMM, nombrePeriodo, weekday } from '../lib/time';
 
 interface Props {
   reporte: Reporte | null;
@@ -51,8 +51,8 @@ export function Procesar(p: Props) {
       const logo = await fetch(p.logoUrl).then((r) => r.arrayBuffer()).then(aBase64).catch(() => undefined);
       const wb = await generarExcel(p.mes, p.config, p.reporte, { logoBase64: logo });
       const buf = await excelABuffer(wb);
-      const { y, mo } = parseISO(p.mes.inicio);
-      const nombre = `Asistencia ${MESES[mo].charAt(0) + MESES[mo].slice(1).toLowerCase()} ${y} (al ${ddmm(p.mes.hasta).replace('/', '-')}).xlsx`;
+      const periodo = nombrePeriodo(p.mes.inicio, p.mes.hasta);
+      const nombre = `Asistencia ${periodo.charAt(0) + periodo.slice(1).toLowerCase()} (del ${ddmm(p.mes.inicio).replace('/', '-')} al ${ddmm(p.mes.hasta).replace('/', '-')}).xlsx`;
       const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       const a = document.createElement('a');
       a.href = url;
@@ -91,7 +91,7 @@ export function Procesar(p: Props) {
             <label className="rounded-lg bg-stone-50 p-3 sm:col-span-2">
               <span className="block text-xs font-semibold uppercase text-stone-500">Calcular hasta el día</span>
               <input type="date" value={p.hasta} min={p.reporte.inicio} max={p.reporte.fin} onChange={(e) => e.target.value && p.setHasta(e.target.value)} className="mt-1" />
-              <span className="mt-1 block text-xs text-stone-500">Por defecto: último día hábil del mes (o el último día que trae el reporte). Puedes elegir otro día para ver cómo va el mes.</span>
+              <span className="mt-1 block text-xs text-stone-500">Por defecto: todo el rango del reporte (aunque abarque varios meses). Puedes elegir un día anterior para ver cómo va.</span>
             </label>
           </div>
         )}
@@ -254,6 +254,9 @@ function DetallePersona({ fila, pct1, pct2 }: { fila: Mes['filas'][number]; pct1
           <th className="p-1 text-right">Dom./fer.</th>
           <th className="p-1 text-right">En contra</th>
           <th className="p-1 text-right">Compensadas</th>
+          <th className="p-1 text-right">S/ {pct1}</th>
+          <th className="p-1 text-right">S/ {pct2}</th>
+          <th className="p-1 text-right">S/ día</th>
           <th className="p-1">Nota</th>
         </tr>
       </thead>
@@ -273,6 +276,9 @@ function DetallePersona({ fila, pct1, pct2 }: { fila: Mes['filas'][number]; pct1
               <td className="p-1 text-right font-mono text-sky-800">{hm(d.calc.enFeriado)}</td>
               <td className="p-1 text-right font-mono text-red-700">{hm(d.calc.contra)}</td>
               <td className="p-1 text-right font-mono text-purple-700">{hm(d.calc.compensado)}</td>
+              <td className="whitespace-nowrap p-1 text-right font-mono text-amber-800">{d.soles.s1 ? d.soles.s1.toFixed(2) : ''}</td>
+              <td className="whitespace-nowrap p-1 text-right font-mono text-amber-800">{d.soles.s2 ? d.soles.s2.toFixed(2) : ''}</td>
+              <td className="whitespace-nowrap p-1 text-right font-mono font-bold text-amber-900">{d.soles.total ? d.soles.total.toFixed(2) : ''}</td>
               <td className="p-1 text-stone-600">{!d.aplica ? 'Antes de su fecha de ingreso' : d.casos.map((c) => c.mensaje + (c.sugerencia ? ` (sugerencia: ${c.sugerencia})` : '')).join(' ')}</td>
             </tr>
           );
