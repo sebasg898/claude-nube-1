@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { configInicial, personaNueva, type Persona } from '../src/lib/config';
 import { calcularDia, clasificar, deduplicar, descontarCompensadas } from '../src/lib/rules';
-import { montoSoles } from '../src/lib/model';
+import { montoSoles, valorHora } from '../src/lib/model';
 import { parseHHMM } from '../src/lib/time';
 
 const cfg = configInicial(2026);
@@ -57,10 +57,12 @@ describe('marcadas', () => {
 });
 
 describe('horas extras y en contra', () => {
-  it('salida 18:19 no da extras; 18:20 sí (desde las 18:00)', () => {
-    expect(ext(calc('08:30', '18:19'))).toBe(0);
-    expect(calc('08:30', '18:20')).toMatchObject({ extra1: 20, extra2: 0 });
+  it('salida 18:29 no da extras; 18:30 sí (desde las 18:00)', () => {
+    expect(ext(calc('08:30', '18:29'))).toBe(0);
+    expect(calc('08:30', '18:30')).toMatchObject({ extra1: 30, extra2: 0 });
     expect(calc('08:30', '19:05')).toMatchObject({ extra1: 65, extra2: 0 });
+    expect(ext(calc('08:30', '12:29', '', 'SAB'))).toBe(0);
+    expect(ext(calc('08:30', '12:30', '', 'SAB'))).toBe(30);
   });
 
   it('cada día: 2 primeras horas al 25%, el resto al 35%', () => {
@@ -164,5 +166,35 @@ describe('compensadas y soles', () => {
     // 2 h al 25% + 1 h al 35% + 4 h de feriado, valor hora S/ 10
     expect(montoSoles({ neto1: 120, neto2: 60, enFeriado: 240 }, 10, cfg.reglas)).toBe(25 + 13.5 + 80);
     expect(montoSoles({ neto1: 20, neto2: 0, enFeriado: 0 }, 7.37, cfg.reglas)).toBe(3.07);
+  });
+});
+
+describe('turno distinto en semana y sábado (caso Victor)', () => {
+  const vic = base({ entrada: h('17:00'), salidaLV: h('22:00'), extrasDesdeLV: h('22:00'), entradaSab: h('08:30'), salidaSab: h('12:00'), horasSemanales: 28.5 });
+
+  it('clasifica las marcadas de la tarde', () => {
+    const { c, r } = dia(['16:55', '22:05'], 'LV', vic);
+    expect([c.entrada, c.salida, c.casos]).toEqual([h('16:55'), h('22:05'), []]);
+    expect(r).toMatchObject({ extra1: 0, contra: 0, trabajado: 310 });
+    expect(dia(['16:58', '22:45'], 'LV', vic).r.extra1).toBe(45);
+    expect(dia(['17:20', '22:00'], 'LV', vic).r.contra).toBe(20);
+    expect(dia(['17:05'], 'LV', vic).c.casos[0].tipo).toBe('una_marcada');
+  });
+
+  it('el sábado usa su propia entrada', () => {
+    const { c, r } = dia(['08:25', '12:40'], 'SAB', vic);
+    expect([c.entrada, c.salida]).toEqual([h('08:25'), h('12:40')]);
+    expect(r).toMatchObject({ extra1: 40, contra: 0 });
+    expect(dia(['08:45', '12:00'], 'SAB', vic).r.contra).toBe(15);
+    expect(calcularDia({ entrada: null, salida: null, motivo: 'Falta' }, 'LV', vic, cfg.reglas, true).contra).toBe(285);
+  });
+
+  it('valor hora: 30 días × 8 h o según sus horas reales', () => {
+    const p = { ...vic, sueldo: 1500 };
+    expect(valorHora(p, cfg.reglas, 'ocho')).toBe(6.25); // 1500 ÷ 30 ÷ 8
+    expect(valorHora(p, cfg.reglas, 'reales')).toBe(10.53); // 1500 ÷ 30 ÷ 4.75
+    expect(valorHora({ ...p, asignacionFamiliar: true }, cfg.reglas, 'ocho')).toBe(6.72); // (1500 + 113) ÷ 240
+    expect(valorHora({ ...p, sueldo: 2000 }, cfg.reglas, 'ocho')).toBe(8.33);
+    expect(valorHora({ ...p, sueldo: 0 }, cfg.reglas, 'ocho')).toBe(0);
   });
 });

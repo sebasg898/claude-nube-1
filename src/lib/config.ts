@@ -13,15 +13,22 @@ export interface Persona {
   /** Transportista / reparto: si no marca salida se le sugiere la hora de salida, pero siempre se pregunta. */
   reparto: boolean;
   horasSemanales: number;
+  /** Entrada de lunes a viernes. */
   entrada: Min;
+  /** Entrada del sábado (puede ser distinta, p. ej. turno de tarde en semana). */
+  entradaSab: Min;
   salidaLV: Min;
   salidaSab: Min;
   /** Las extras de lunes a viernes se cuentan desde esta hora (normalmente = salida L-V). */
   extrasDesdeLV: Min;
   /** Si llega antes de esta hora, el tiempo antes de su entrada cuenta como extra. null = nunca (regla actual). */
   tempranoAntesDe: Min | null;
-  /** Valor de una hora normal en soles (sueldo mensual ÷ 240). */
-  valorHora: number;
+  /** Sueldo mensual en soles. */
+  sueldo: number;
+  /** Recibe asignación familiar (se suma al sueldo para el valor hora). */
+  asignacionFamiliar: boolean;
+  /** Cómo se calcula el valor hora: 30 días × 8 h, o 30 días × sus horas reales por día (horas semanales ÷ 6). */
+  valorHoraSegun: 'ocho' | 'reales';
   /** Si se le restan tardanzas, salidas antes de hora y permisos. */
   descuenta: boolean;
   /** Días anteriores no se cuentan (persona nueva). */
@@ -38,7 +45,7 @@ export interface Persona {
 export const MOTIVOS = ['Vacaciones', 'Salud', 'Compensado', 'Estudio', 'Falta'] as const;
 
 export interface Reglas {
-  /** Las extras solo cuentan si sale este número de minutos o más después de su hora (18:20 → 20). */
+  /** Las extras solo cuentan si sale este número de minutos o más después de su hora (30 → desde las 18:30). */
   margenExtras: Min;
   almuerzoMin: Min;
   /** La tardanza se resta de la bolsa solo si es de estos minutos o más (0 = toda tardanza resta). */
@@ -49,10 +56,12 @@ export interface Reglas {
   recargo1: number;
   recargo2: number;
   recargoFeriado: number;
+  /** Monto de la asignación familiar (10% de la remuneración mínima vital). */
+  montoAsignacion: number;
 }
 
 export interface Config {
-  version: 3;
+  version: 4;
   empresaNombre: string;
   personas: Persona[];
   reglas: Reglas;
@@ -62,10 +71,10 @@ export interface Config {
 
 export function configInicial(anio = new Date().getFullYear()): Config {
   return {
-    version: 3,
+    version: 4,
     empresaNombre: 'QALEN',
     personas: [],
-    reglas: { margenExtras: 20, almuerzoMin: 45, tardanzaDesde: 0, tramo1Min: 120, recargo1: 1.25, recargo2: 1.35, recargoFeriado: 2 },
+    reglas: { montoAsignacion: 113, margenExtras: 30, almuerzoMin: 45, tardanzaDesde: 0, tramo1Min: 120, recargo1: 1.25, recargo2: 1.35, recargoFeriado: 2 },
     feriados: [...feriadosPeru(anio), ...feriadosPeru(anio + 1)],
   };
 }
@@ -84,11 +93,14 @@ export function personaNueva(r: Pick<RelojPersona, 'id' | 'nombre'>, aliasUsados
     reparto: false,
     horasSemanales: 48,
     entrada: 8 * 60 + 30,
+    entradaSab: 8 * 60 + 30,
     salidaLV: 18 * 60,
     salidaSab: 12 * 60,
     extrasDesdeLV: 18 * 60,
     tempranoAntesDe: null,
-    valorHora: 0,
+    sueldo: 0,
+    asignacionFamiliar: false,
+    valorHoraSegun: 'ocho',
     descuenta: true,
     fechaIngreso: null,
   };
@@ -103,8 +115,10 @@ export function validarConfig(c: Config): string[] {
     if (!a) err.push(`La persona con ID ${p.id} no tiene nombre corto.`);
     alias.set(a, (alias.get(a) ?? 0) + 1);
     if (!(p.horasSemanales > 0 && p.horasSemanales <= 72)) err.push(`${p.alias}: las horas semanales deben estar entre 1 y 72.`);
-    if (p.salidaLV <= p.entrada) err.push(`${p.alias}: la salida L-V debe ser después de la entrada.`);
-    if (p.salidaSab <= p.entrada) err.push(`${p.alias}: la salida del sábado debe ser después de la entrada.`);
+    if (p.salidaLV <= p.entrada) err.push(`${p.alias}: la salida L-V debe ser después de la entrada L-V.`);
+    if (p.salidaSab <= p.entradaSab) err.push(`${p.alias}: la salida del sábado debe ser después de la entrada del sábado.`);
+    if (p.extrasDesdeLV < p.salidaLV) err.push(`${p.alias}: "Extras desde" no puede ser antes de su salida L-V.`);
+    if (!(p.sueldo >= 0 && p.sueldo < 100000)) err.push(`${p.alias}: el sueldo no es válido.`);
   }
   for (const [a, n] of alias) if (n > 1 && a) err.push(`El nombre corto "${a}" está repetido; cada persona necesita uno distinto.`);
   if (!(c.reglas.margenExtras >= 0 && c.reglas.margenExtras <= 120)) err.push('El margen de extras debe estar entre 0 y 120 minutos.');
@@ -113,7 +127,7 @@ export function validarConfig(c: Config): string[] {
     if (!(c.reglas[k] >= 1 && c.reglas[k] <= 4)) err.push(`El ${n} debe estar entre 1 y 4 (por ejemplo 1.25).`);
   }
   if (!(c.reglas.tramo1Min >= 0 && c.reglas.tramo1Min <= 600)) err.push('Las horas del primer recargo deben estar entre 0 y 10.');
-  for (const p of c.personas.filter((x) => x.activo)) if (!(p.valorHora >= 0 && p.valorHora < 1000)) err.push(`${p.alias}: el valor hora no es válido.`);
+  if (!(c.reglas.montoAsignacion >= 0 && c.reglas.montoAsignacion < 10000)) err.push('El monto de la asignación familiar no es válido.');
   return err;
 }
 
@@ -146,16 +160,20 @@ export function normalizarConfig(x: unknown): Config {
   // Migración de respaldos antiguos (versión 1 o 2).
   const ver = (o as { version?: number }).version ?? 1;
   return {
-    version: 3,
+    version: 4,
     empresaNombre: o.empresaNombre ?? base.empresaNombre,
     personas: o.personas.map((p) => {
-      const { saldoAnterior: _s, ...resto } = p as Persona & { saldoAnterior?: number };
+      const { saldoAnterior: _s, valorHora, ...resto } = p as Persona & { saldoAnterior?: number; valorHora?: number };
       void _s;
-      return { ...plantilla, ...resto, id: String(p.id), ...(ver < 3 ? { tempranoAntesDe: null } : {}) };
+      const migr: Partial<Persona> = {};
+      if (ver < 3) migr.tempranoAntesDe = null;
+      // Versión < 4: antes se escribía el valor hora; ahora se escribe el sueldo (valor hora × 240).
+      if (ver < 4 && !resto.sueldo && valorHora) migr.sueldo = Math.round(valorHora * 240 * 100) / 100;
+      return { ...plantilla, ...resto, id: String(p.id), ...migr };
     }),
     reglas: (() => {
-      // Versión < 3: llegar temprano deja de sumar; las extras se pagan con recargo (25% / 35% / 100%).
-      const { factorFeriado: _f, ...r } = { ...base.reglas, ...(o.reglas ?? {}), ...(ver < 3 ? { tardanzaDesde: 0 } : {}) } as Reglas & { factorFeriado?: number };
+      // Versión < 3: llegar temprano deja de sumar; extras con recargo. Versión < 4: margen de extras 30 min.
+      const { factorFeriado: _f, ...r } = { ...base.reglas, ...(o.reglas ?? {}), ...(ver < 3 ? { tardanzaDesde: 0 } : {}), ...(ver < 4 ? { margenExtras: 30 } : {}) } as Reglas & { factorFeriado?: number };
       void _f;
       return r;
     })(),

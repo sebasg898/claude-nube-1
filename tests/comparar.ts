@@ -23,12 +23,12 @@ export function compararConPagina(x: XLSX.WorkBook, mes: Mes) {
       trab: min(res, r, RES.trabajado), base: min(res, r, RES.base),
       e1: min(res, r, RES.extra1), e2: min(res, r, RES.extra2), cmp: min(res, r, RES.compensado),
       n1: min(res, r, RES.neto1), n2: min(res, r, RES.neto2), fer: min(res, r, RES.feriado),
-      monto: num(res, r, RES.monto), debe: min(res, r, RES.nosDebe), con: min(res, r, RES.contra),
+      vh: num(res, r, RES.valorHora), monto: num(res, r, RES.monto), total: num(res, r, RES.totalMes), debe: min(res, r, RES.nosDebe), con: min(res, r, RES.contra),
       faltas: num(res, r, RES.faltas), pend: num(res, r, RES.pendientes),
     };
     expect(leido).toEqual({
       p: fp.persona.alias, trab: t.trabajado, base: t.base, e1: t.extra1, e2: t.extra2, cmp: t.compensado,
-      n1: t.neto1, n2: t.neto2, fer: t.enFeriado, monto: t.monto, debe: t.nosDebe, con: t.contra, faltas: t.faltas, pend: t.pendientes,
+      n1: t.neto1, n2: t.neto2, fer: t.enFeriado, vh: t.valorHora, monto: t.monto, total: t.totalMes, debe: t.nosDebe, con: t.contra, faltas: t.faltas, pend: t.pendientes,
     });
     const b = filaBloque(i);
     fp.dias.forEach((d, j) => {

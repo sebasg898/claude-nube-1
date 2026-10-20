@@ -40,8 +40,15 @@ export interface Totales {
   pendientes: number;
   faltas: number;
   dias: number;
-  /** Monto a pagar en soles (extras netas y domingo/feriado). */
+  /** Valor hora usado (según cómo esté configurada la persona). */
+  valorHora: number;
+  /** Pago de horas extras en soles (extras netas y domingo/feriado). */
   monto: number;
+  /** El pago de extras con cada forma de calcular el valor hora (para comparar). */
+  montoOcho: number;
+  montoReales: number;
+  /** Sueldo + asignación familiar + pago de extras. */
+  totalMes: number;
 }
 
 export interface Mes {
@@ -125,7 +132,10 @@ export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
 
 /** Totales de una persona. También reparte las compensadas sobre las extras (guarda el neto de cada día). */
 export function totales(p: Persona, dias: Dia[], r: Reglas): Totales {
-  const t: Totales = { trabajado: 0, base: 0, extra1: 0, extra2: 0, compensado: 0, neto1: 0, neto2: 0, enFeriado: 0, nosDebe: 0, contra: 0, pendientes: 0, faltas: 0, dias: 0, monto: 0 };
+  const t: Totales = {
+    trabajado: 0, base: 0, extra1: 0, extra2: 0, compensado: 0, neto1: 0, neto2: 0, enFeriado: 0, nosDebe: 0, contra: 0,
+    pendientes: 0, faltas: 0, dias: 0, valorHora: 0, monto: 0, montoOcho: 0, montoReales: 0, totalMes: 0,
+  };
   for (const d of dias) {
     t.trabajado += d.calc.trabajado;
     t.extra1 += d.calc.extra1;
@@ -145,14 +155,34 @@ export function totales(p: Persona, dias: Dia[], r: Reglas): Totales {
     t.neto2 += netos[i].neto2;
   });
   t.nosDebe = nosDebe;
-  t.monto = montoSoles(t, p.valorHora, r);
+  t.montoOcho = montoSoles(t, valorHora(p, r, 'ocho'), r);
+  t.montoReales = montoSoles(t, valorHora(p, r, 'reales'), r);
+  t.valorHora = valorHora(p, r, p.valorHoraSegun);
+  t.monto = p.valorHoraSegun === 'reales' ? t.montoReales : t.montoOcho;
+  t.totalMes = redondear2(p.sueldo + asignacion(p, r) + t.monto);
   return t;
+}
+
+const redondear2 = (v: number) => Math.round(v * 100) / 100;
+
+export function asignacion(p: Persona, r: Reglas): number {
+  return p.asignacionFamiliar ? r.montoAsignacion : 0;
+}
+
+/**
+ * Valor hora = (sueldo + asignación familiar) ÷ 30 días ÷ horas por día, redondeado a 2 decimales.
+ * Horas por día: 8 (forma "ocho"), o sus horas reales = horas semanales ÷ 6 (forma "reales").
+ */
+export function valorHora(p: Persona, r: Reglas, segun: Persona['valorHoraSegun']): number {
+  const horasDia = segun === 'reales' ? baseDiaria(p) / 60 : 8;
+  if (!(p.sueldo > 0) || !(horasDia > 0)) return 0;
+  return redondear2((p.sueldo + asignacion(p, r)) / 30 / horasDia);
 }
 
 /** Igual que la fórmula del Excel: ROUND(horas × valor hora × recargo, 2). */
 export function montoSoles(t: Pick<Totales, 'neto1' | 'neto2' | 'enFeriado'>, valorHora: number, r: Reglas): number {
   const v = (t.neto1 / 60) * valorHora * r.recargo1 + (t.neto2 / 60) * valorHora * r.recargo2 + (t.enFeriado / 60) * valorHora * r.recargoFeriado;
-  return Math.round(v * 100) / 100;
+  return redondear2(v);
 }
 
 /** Horas base por día laborable (lunes a sábado): horas semanales ÷ 6. */

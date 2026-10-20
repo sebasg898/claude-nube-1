@@ -2,7 +2,8 @@ import type { DayType } from './calendar';
 import type { Persona, Reglas } from './config';
 import { fmtHHMM, type Min } from './time';
 
-const H11 = 11 * 60;
+/** Hasta cuánto después de su hora de entrada una marcada todavía se toma como entrada (08:30 → 11:00). */
+const VENTANA_ENTRADA = 150;
 const H12 = 12 * 60;
 const H1530 = 15 * 60 + 30;
 const H0630 = 6 * 60 + 30;
@@ -48,8 +49,19 @@ export function deduplicar(ms: Min[]): { marcas: Min[]; duplicadas: Min[] } {
   return { marcas, duplicadas };
 }
 
-export function limiteSalidaLV(p: Persona): Min {
-  return Math.max(H11, p.salidaLV - 90);
+/** Hora de entrada según el día (lunes a viernes o sábado). */
+export function entradaDe(p: Persona, tipo: DayType): Min {
+  return tipo === 'SAB' ? p.entradaSab : p.entrada;
+}
+
+/** Última hora en que una marcada se toma como entrada (con su horario normal, 11:00). */
+export function limiteEntrada(p: Persona, tipo: DayType): Min {
+  return entradaDe(p, tipo) + VENTANA_ENTRADA;
+}
+
+/** Desde qué hora la última marcada se toma como salida (L-V normal: 16:30; sábado: después de las 11:00). */
+export function limiteSalida(p: Persona, tipo: DayType): Min {
+  return tipo === 'SAB' ? limiteEntrada(p, tipo) : Math.max(limiteEntrada(p, tipo), p.salidaLV - 90);
 }
 
 /** Decide cuál marcada es la entrada y cuál la salida. No adivina: lo dudoso queda como caso. */
@@ -80,11 +92,12 @@ export function clasificar(raw: Min[], tipo: DayType, p: Persona, aplica: boolea
 
   const primera = marcas[0];
   const ultima = marcas[marcas.length - 1];
-  const limite = tipo === 'SAB' ? H11 : limiteSalidaLV(p);
+  const limEnt = limiteEntrada(p, tipo);
+  const limite = limiteSalida(p, tipo);
   const horaFin = tipo === 'SAB' ? p.salidaSab : p.salidaLV;
 
-  if (primera < H11) c.entrada = primera;
-  if (ultima >= limite && ultima > H11 && !(marcas.length === 1 && c.entrada != null)) c.salida = ultima;
+  if (primera < limEnt) c.entrada = primera;
+  if (ultima >= limite && (tipo !== 'SAB' || ultima > limEnt) && !(marcas.length === 1 && c.entrada != null)) c.salida = ultima;
 
   // Almuerzo (solo informativo) y otras marcadas
   const medio = marcas.filter((m) => m !== c.entrada && m !== c.salida);
@@ -110,7 +123,7 @@ export function clasificar(raw: Min[], tipo: DayType, p: Persona, aplica: boolea
       c.casos.push({ tipo: 'sin_entrada', faltaDato: true, mensaje: `No marcó entrada: la primera marcada es a las ${fmtHHMM(primera)}.` });
     }
     if (c.salida == null) {
-      const msg = tipo === 'LV' && ultima >= H11
+      const msg = tipo === 'LV' && ultima >= limEnt
         ? `No marcó salida: la última marcada es a las ${fmtHHMM(ultima)}. ¿Es el almuerzo y luego no marcó, o salió a esa hora?`
         : `No marcó salida (marcadas: ${lista}).`;
       c.casos.push({
@@ -122,7 +135,7 @@ export function clasificar(raw: Min[], tipo: DayType, p: Persona, aplica: boolea
     }
   }
 
-  const raras = marcas.filter((m) => m < H0630 || m > H22);
+  const raras = marcas.filter((m) => m < Math.min(H0630, entradaDe(p, tipo) - 120) || m > Math.max(H22, horaFin + 60));
   if (raras.length) {
     c.casos.push({ tipo: 'hora_rara', faltaDato: false, mensaje: `Marcada a una hora poco común: ${raras.map(fmtHHMM).join(', ')}. Es válida, pero conviene revisarla.` });
   }
@@ -157,13 +170,21 @@ export interface DiaCalculo {
 /** Jornada de un día completo (para Falta, Estudio o Compensado sin marcadas). */
 export function jornada(p: Persona, tipo: DayType): Min {
   const fin = tipo === 'SAB' ? p.salidaSab : p.salidaLV;
-  return Math.min(Math.round((p.horasSemanales * 60) / 6), fin - p.entrada);
+  return Math.min(Math.round((p.horasSemanales * 60) / 6), fin - entradaDe(p, tipo));
 }
 
 /** Horas trabajadas de un día normal completo (Vacaciones / Salud). */
 export function diaCompleto(p: Persona, tipo: DayType, r: Reglas): Min {
   const fin = tipo === 'SAB' ? p.salidaSab : p.salidaLV;
-  return fin - p.entrada - (tipo === 'LV' ? r.almuerzoMin : 0);
+  const ini = entradaDe(p, tipo);
+  return fin - ini - (tipo === 'LV' && descuentaAlmuerzo(ini, fin) ? r.almuerzoMin : 0);
+}
+
+const H13 = 13 * 60;
+const H14 = 14 * 60;
+/** El almuerzo (L-V) se descuenta si trabajó más de 5 h y su horario pasa por el mediodía (antes de las 13:00 y después de las 14:00). */
+export function descuentaAlmuerzo(e: Min, s: Min): boolean {
+  return s - e > 300 && e < H13 && s > H14;
 }
 
 /**
@@ -182,10 +203,7 @@ export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, a
   z.falta = m === 'falta';
   const laborable = tipo === 'LV' || tipo === 'SAB';
 
-  if (ambos && s! > e!) {
-    const bruto = s! - e!;
-    z.trabajado = bruto - (tipo === 'LV' && bruto > 300 ? r.almuerzoMin : 0);
-  }
+  if (ambos && s! > e!) z.trabajado = s! - e! - (tipo === 'LV' && descuentaAlmuerzo(e!, s!) ? r.almuerzoMin : 0);
   if (!laborable) {
     z.pendiente = xor;
     if (ambos && s! > e!) z.enFeriado = s! - e!;
@@ -201,18 +219,19 @@ export function calcularDia(d: DiaInput, tipo: DayType, p: Persona, r: Reglas, a
   }
 
   const fin = tipo === 'SAB' ? p.salidaSab : p.salidaLV;
+  const ini = entradaDe(p, tipo);
   const extrasDesde = tipo === 'SAB' ? p.salidaSab : p.extrasDesdeLV;
   if (m !== 'falta') {
     let ext = 0;
     if (s != null && s >= extrasDesde + r.margenExtras) ext += s - extrasDesde;
-    if (e != null && p.tempranoAntesDe != null && e < p.tempranoAntesDe && e < p.entrada) ext += p.entrada - e;
+    if (e != null && p.tempranoAntesDe != null && e < p.tempranoAntesDe && e < ini) ext += ini - e;
     z.extra1 = Math.min(ext, r.tramo1Min);
     z.extra2 = ext - z.extra1;
   }
 
   if (p.descuenta) {
     let faltan = 0;
-    if (e != null && e - p.entrada >= Math.max(r.tardanzaDesde, 1)) faltan += e - p.entrada;
+    if (e != null && e - ini >= Math.max(r.tardanzaDesde, 1)) faltan += e - ini;
     if (s != null && s < fin) faltan += fin - s;
     const sinMarcas = e == null && s == null;
     if (m === 'falta') z.contra = jornada(p, tipo);

@@ -32,7 +32,7 @@ export function Procesar(p: Props) {
   const pendientes = p.casos.filter((c) => c.caso.faltaDato).length;
   const pct = (f: number) => `${Math.round((f - 1) * 100)}%`;
   const pct1 = pct(p.config.reglas.recargo1), pct2 = pct(p.config.reglas.recargo2), pctF = pct(p.config.reglas.recargoFeriado);
-  const sinValorHora = p.mes?.filas.filter((f) => !(f.persona.valorHora > 0)).map((f) => f.persona.alias) ?? [];
+  const sinSueldo = p.mes?.filas.filter((f) => !(f.persona.sueldo > 0)).map((f) => f.persona.alias) ?? [];
   const paraMirar = p.casos.length - pendientes;
 
   function soltar(e: React.DragEvent) {
@@ -126,7 +126,8 @@ export function Procesar(p: Props) {
                     <th className="p-2 text-right">A pagar {pct1}</th>
                     <th className="p-2 text-right">A pagar {pct2}</th>
                     <th className="p-2 text-right">Dom./fer. {pctF}</th>
-                    <th className="p-2 text-right">Total S/</th>
+                    <th className="p-2 text-right">Pago extras</th>
+                    <th className="p-2 text-right">Sueldo + extras</th>
                     <th className="p-2 text-right">Nos debe</th>
                     <th className="p-2 text-right">En contra</th>
                     <th className="p-2 text-center">Por completar</th>
@@ -148,8 +149,20 @@ export function Procesar(p: Props) {
                           <td className="p-2 text-right font-semibold text-green-800">{hm(f.tot.neto2)}</td>
                           <td className="p-2 text-right font-semibold text-sky-800">{hm(f.tot.enFeriado)}</td>
                           <td className="p-2 text-right font-bold">
-                            {f.persona.valorHora > 0 ? <span className="text-green-800">{soles(f.tot.monto)}</span> : <span className="rounded bg-yellow-200 px-1 text-xs font-semibold text-amber-900" title="Falta el valor hora (Personas y reglas o Resumen del Excel)">sin valor hora</span>}
+                            {f.persona.sueldo > 0 ? (
+                              <>
+                                <span className="text-green-800">{soles(f.tot.monto)}</span>
+                                {f.tot.montoOcho !== f.tot.montoReales && (
+                                  <span className="block whitespace-nowrap text-xs font-normal text-stone-500" title="El mismo pago con la otra forma de calcular el valor hora">
+                                    {f.persona.valorHoraSegun === 'reales' ? '30 d × 8 h' : 'horas reales'}: {soles(f.persona.valorHoraSegun === 'reales' ? f.tot.montoOcho : f.tot.montoReales)}
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="rounded bg-yellow-200 px-1 text-xs font-semibold text-amber-900" title="Falta el sueldo (Personas y reglas o Resumen del Excel)">sin sueldo</span>
+                            )}
                           </td>
+                          <td className="whitespace-nowrap p-2 text-right">{f.persona.sueldo > 0 ? soles(f.tot.totalMes) : ''}</td>
                           <td className="p-2 text-right font-bold text-red-700">{hm(f.tot.nosDebe)}</td>
                           <td className="p-2 text-right text-red-700">{hm(f.tot.contra)}</td>
                           <td className="p-2 text-center">{f.tot.pendientes ? <span className="rounded bg-yellow-300 px-2 font-bold">{f.tot.pendientes}</span> : <span className="text-green-700">✔</span>}</td>
@@ -157,7 +170,7 @@ export function Procesar(p: Props) {
                         </tr>
                         {ab && (
                           <tr>
-                            <td colSpan={13} className="bg-stone-50 p-2">
+                            <td colSpan={14} className="bg-stone-50 p-2">
                               <DetallePersona fila={f} pct1={pct1} pct2={pct2} />
                             </td>
                           </tr>
@@ -189,9 +202,9 @@ export function Procesar(p: Props) {
                 <button className="mt-2 font-semibold underline" onClick={p.irAPersonas}>Ir a Personas y reglas</button>
               </Caja>
             )}
-            {sinValorHora.length > 0 && (
+            {sinSueldo.length > 0 && (
               <Caja tipo="aviso">
-                Falta el valor hora de: <b>{sinValorHora.join(', ')}</b>. Sin él no se calcula el total en soles. Puedes ponerlo en{' '}
+                Falta el sueldo de: <b>{sinSueldo.join(', ')}</b>. Sin él no se calcula el pago en soles. Puedes ponerlo en{' '}
                 <button className="font-semibold underline" onClick={p.irAPersonas}>Personas y reglas</button> o después en el Resumen del Excel (celdas amarillas).
               </Caja>
             )}
