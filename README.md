@@ -10,6 +10,17 @@ falta un dato, y un **Resumen de la bolsa de horas** que se recalcula solo con f
 2. **Procesar mes** → arrastra el `.xls` del reloj. Se analiza todo el rango del reporte (aunque abarque varios meses); se puede elegir un día anterior.
 3. Revisa en pantalla (cada persona se expande día por día) y pulsa **Descargar Excel**.
 4. En el Excel, hoja **Asistencia**: completa lo amarillo (hora o motivo). **Resumen** y **Semanal** se actualizan solos.
+5. **¿Continúas un período ya trabajado?** Sube el reporte nuevo del reloj y, abajo, el Excel que ya completaste ("Subir Excel anterior").
+   La página copia lo que escribiste (horas a mano, motivos, sueldo y asignación) y genera un Excel con todo el rango: solo quedan en amarillo los días nuevos.
+
+### Continuar un Excel ya trabajado
+
+- Rango final: desde el primer día del más antiguo hasta el último del más nuevo (aunque solo se traslapen algunos días).
+- Días del traslape: marcadas del reporte nuevo. Días que solo están en el Excel anterior: las marcadas de su fila "Reloj".
+- Se copian las horas escritas a mano (las que no coinciden con el reloj) y todos los motivos. Si ella escribió una hora y ahora
+  el reloj trae otra, se respeta la suya y la página lo avisa.
+- Si hay días sin datos entre ambos (hueco), se avisa y quedan en amarillo con la nota "no está en ningún reporte del reloj".
+- Horario, horas semanales, sueldo, etc. se guardan en "Personas y reglas" (en el navegador) y se aplican a todo el período.
 
 Nada sale de la computadora. La configuración (personas y reglas) se guarda en el navegador, con respaldo JSON.
 

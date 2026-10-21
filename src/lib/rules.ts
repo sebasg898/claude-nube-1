@@ -16,7 +16,8 @@ export type TipoCaso =
   | 'una_marcada'
   | 'hora_rara'
   | 'extras_altas'
-  | 'domingo_feriado';
+  | 'domingo_feriado'
+  | 'copiado';
 
 export interface Caso {
   tipo: TipoCaso;

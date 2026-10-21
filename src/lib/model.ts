@@ -1,8 +1,9 @@
 import { dayType, type DayType } from './calendar';
 import { personaNueva, type Config, type Persona, type Reglas } from './config';
 import type { Reporte } from './parser';
+import type { Ediciones } from './anterior';
 import { calcularDia, clasificar, descontarCompensadas, type Caso, type Clasificacion, type DiaCalculo, type Neto } from './rules';
-import { daysBetween, fmtHHMM, weekday, type ISODate, type Min } from './time';
+import { daysBetween, ddmm, fmtHHMM, weekday, type ISODate, type Min } from './time';
 
 export interface Dia {
   fecha: ISODate;
@@ -103,7 +104,9 @@ export function corteMes(rep: Reporte): ISODate {
   return rep.fin;
 }
 
-export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
+export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate, ediciones: Ediciones = {}): Mes {
+  const sinDatos = new Set(rep.sinDatos ?? []);
+  const conflictos: string[] = [];
   const feriados = new Set(cfg.feriados.map((f) => f.fecha));
   const fin = hasta > rep.fin ? rep.fin : hasta < rep.inicio ? rep.inicio : hasta;
   const activos = cfg.personas.filter((p) => p.activo);
@@ -130,19 +133,44 @@ export function construirMes(rep: Reporte, cfg: Config, hasta: ISODate): Mes {
       const marc = r?.marcadas[fecha] ?? [];
       const clas = clasificar(marc, tipo, p, aplica);
       // Antes de la fecha de ingreso no se cuenta nada: las marcadas quedan solo como referencia.
-      const entrada = aplica ? clas.entrada : null;
-      const salida = aplica ? clas.salida : null;
-      const calc = calcularDia({ entrada, salida, motivo: '' }, tipo, p, cfg.reglas, aplica);
+      let entrada = aplica ? clas.entrada : null;
+      let salida = aplica ? clas.salida : null;
+      let motivo = '';
       const casos = [...clas.casos];
+      if (sinDatos.has(fecha)) {
+        for (const c of casos) if (c.tipo === 'sin_marcadas') c.mensaje = 'Este día no está en ningún reporte del reloj: saca un reporte que lo incluya o complétalo a mano.';
+      }
+      // Lo que Yasmín ya completó en un Excel anterior (se respeta aunque el reloj diga otra cosa)
+      const ed = ediciones[p.id]?.[fecha];
+      if (ed && aplica) {
+        const copiado: string[] = [];
+        if (ed.entrada != null) {
+          if (entrada != null && entrada !== ed.entrada) conflictos.push(`${p.alias} ${ddmm(fecha)}: entrada escrita ${fmtHHMM(ed.entrada)}, el reloj tiene ${fmtHHMM(entrada)}`);
+          entrada = ed.entrada;
+          copiado.push(`entrada ${fmtHHMM(ed.entrada)}`);
+        }
+        if (ed.salida != null) {
+          if (salida != null && salida !== ed.salida) conflictos.push(`${p.alias} ${ddmm(fecha)}: salida escrita ${fmtHHMM(ed.salida)}, el reloj tiene ${fmtHHMM(salida)}`);
+          salida = ed.salida;
+          copiado.push(`salida ${fmtHHMM(ed.salida)}`);
+        }
+        if (ed.motivo) {
+          motivo = ed.motivo;
+          copiado.push(`motivo ${ed.motivo}`);
+        }
+        casos.push({ tipo: 'copiado', faltaDato: false, mensaje: `Copiado del Excel anterior: ${copiado.join(', ')}.` });
+      }
+      const calc = calcularDia({ entrada, salida, motivo }, tipo, p, cfg.reglas, aplica);
       const ext = calc.extra1 + calc.extra2;
       if (ext > 180) casos.push({ tipo: 'extras_altas', faltaDato: false, mensaje: `Más de 3 horas extras en el día (${Math.floor(ext / 60)} h ${ext % 60} min). Solo para revisar.` });
-      return { fecha, tipo, aplica, reloj: clas.marcas.map(fmtHHMM).join(' '), clas, entrada, salida, motivo: '', calc, neto: { neto1: 0, neto2: 0 }, soles: SIN_SOLES, casos };
+      return { fecha, tipo, aplica, reloj: clas.marcas.map(fmtHHMM).join(' '), clas, entrada, salida, motivo, calc, neto: { neto1: 0, neto2: 0 }, soles: SIN_SOLES, casos };
     });
     return { persona: p, dias, tot: totales(p, dias, cfg.reglas) };
   });
 
   const avisos: string[] = [];
-  if (fin < rep.fin) avisos.push(`Se calcula hasta el ${fin}; el reporte trae marcadas hasta el ${rep.fin}.`);
+  if (fin < rep.fin) avisos.push(`Se calcula hasta el ${ddmm(fin)}; el período llega hasta el ${ddmm(rep.fin)}.`);
+  if (conflictos.length) avisos.push(`Se respetaron ${conflictos.length} hora(s) que escribiste a mano aunque ahora el reloj tiene otra marcada: ${conflictos.join('; ')}.`);
   return { inicio: rep.inicio, hasta: fin, finReporte: rep.fin, fechas, filas, avisos };
 }
 

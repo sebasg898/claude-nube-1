@@ -13,8 +13,13 @@ interface Props {
   casos: CasoListado[];
   hasta: string;
   setHasta: (s: string) => void;
+  /** Rango total (reporte nuevo + Excel anterior). */
+  rango: { inicio: string; fin: string } | null;
   avisos: string[];
   error: string;
+  anterior: { nombre: string; inicio: string; fin: string; copiados: number | null } | null;
+  errorAnterior: string;
+  onAnterior: (f: File | null) => void;
   erroresConfig: string[];
   onArchivo: (f: File) => void;
   irAPersonas: () => void;
@@ -28,12 +33,13 @@ export function Procesar(p: Props) {
   const [generando, setGenerando] = useState(false);
   const [errorDescarga, setErrorDescarga] = useState('');
   const input = useRef<HTMLInputElement>(null);
+  const inputAnt = useRef<HTMLInputElement>(null);
 
-  const pendientes = p.casos.filter((c) => c.caso.faltaDato).length;
+  const pendientes = p.mes?.filas.reduce((a, f) => a + f.tot.pendientes, 0) ?? 0;
   const pct = (f: number) => `${Math.round((f - 1) * 100)}%`;
   const pct1 = pct(p.config.reglas.recargo1), pct2 = pct(p.config.reglas.recargo2), pctF = pct(p.config.reglas.recargoFeriado);
   const sinSueldo = p.mes?.filas.filter((f) => !(f.persona.sueldo > 0)).map((f) => f.persona.alias) ?? [];
-  const paraMirar = p.casos.length - pendientes;
+  const paraMirar = p.casos.filter((c) => !c.caso.faltaDato && c.caso.tipo !== 'copiado').length;
 
   function soltar(e: React.DragEvent) {
     e.preventDefault();
@@ -84,14 +90,47 @@ export function Procesar(p: Props) {
         </div>
         {p.error && <Caja tipo="error">{p.error}</Caja>}
 
-        {p.reporte && p.mes && (
+        {/* Continuar un Excel ya trabajado */}
+        <div
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) p.onAnterior(f); }}
+          className={`mt-3 flex flex-wrap items-center gap-3 rounded-xl border-2 border-dashed p-4 ${p.anterior ? 'border-sky-400 bg-sky-50' : 'border-stone-200'}`}
+        >
+          <span className="text-2xl">↩</span>
+          <div className="mr-auto text-sm">
+            {p.anterior ? (
+              <>
+                <p className="font-semibold text-sky-900">Continuando: {p.anterior.nombre}</p>
+                <p className="text-sky-800">
+                  Excel anterior del {ddmm(p.anterior.inicio)} al {ddmm(p.anterior.fin)}.
+                  {p.anterior.copiados != null ? ` Se copiaron ${p.anterior.copiados} dato(s) que ya habías completado (horas escritas a mano y motivos).` : ' Ahora sube el reporte nuevo del reloj arriba.'}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-semibold">¿Ya trabajaste un Excel de este período? <span className="font-normal text-stone-500">(opcional)</span></p>
+                <p className="text-stone-500">Súbelo aquí y se copiará lo que ya completaste: solo tendrás que llenar los días nuevos.</p>
+              </>
+            )}
+          </div>
+          {p.anterior && (
+            <button className="rounded border border-stone-300 bg-white px-3 py-1 text-sm" onClick={() => p.onAnterior(null)}>Quitar</button>
+          )}
+          <button className="rounded bg-sky-700 px-3 py-1 text-sm font-semibold text-white hover:bg-sky-800" onClick={() => inputAnt.current?.click()}>
+            {p.anterior ? 'Cambiar' : 'Subir Excel anterior'}
+          </button>
+          <input ref={inputAnt} type="file" accept=".xlsx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onAnterior(f); e.target.value = ''; }} />
+        </div>
+        {p.errorAnterior && <Caja tipo="error">{p.errorAnterior}</Caja>}
+
+        {p.reporte && p.mes && p.rango && (
           <div className="mt-4 grid gap-3 sm:grid-cols-4">
-            <Dato titulo="Período del reporte" valor={`${ddmm(p.reporte.inicio)} al ${ddmm(p.reporte.fin)}`} />
+            <Dato titulo={p.anterior ? 'Período (reporte + Excel anterior)' : 'Período del reporte'} valor={`${ddmm(p.rango.inicio)} al ${ddmm(p.rango.fin)}`} />
             <Dato titulo="Personas en el reloj" valor={String(p.reporte.personas.length)} sub={`${p.mes.filas.length} activas`} />
             <label className="rounded-lg bg-stone-50 p-3 sm:col-span-2">
               <span className="block text-xs font-semibold uppercase text-stone-500">Calcular hasta el día</span>
-              <input type="date" value={p.hasta} min={p.reporte.inicio} max={p.reporte.fin} onChange={(e) => e.target.value && p.setHasta(e.target.value)} className="mt-1" />
-              <span className="mt-1 block text-xs text-stone-500">Por defecto: todo el rango del reporte (aunque abarque varios meses). Puedes elegir un día anterior para ver cómo va.</span>
+              <input type="date" value={p.hasta} min={p.rango.inicio} max={p.rango.fin} onChange={(e) => e.target.value && p.setHasta(e.target.value)} className="mt-1" />
+              <span className="mt-1 block text-xs text-stone-500">Por defecto: todo el rango (aunque abarque varios meses). Puedes elegir un día anterior para ver cómo va.</span>
             </label>
           </div>
         )}

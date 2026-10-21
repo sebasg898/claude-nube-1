@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import logoUrl from './assets/logo-qalen.png';
 import { cargarConfig, configInicial, guardarConfig, validarConfig, type Config } from './lib/config';
-import { construirMes, corteMes, listarCasos, sincronizarPersonas } from './lib/model';
+import { aplicarSueldos, combinarConAnterior, leerExcelAnterior, type ExcelAnterior } from './lib/anterior';
+import { construirMes, listarCasos, sincronizarPersonas } from './lib/model';
 import { leerReporte, type Reporte } from './lib/parser';
 import { Procesar } from './ui/Procesar';
 import { Personas } from './ui/Personas';
@@ -16,11 +17,21 @@ export default function App() {
   const [hasta, setHasta] = useState('');
   const [avisosCarga, setAvisosCarga] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [anterior, setAnterior] = useState<{ datos: ExcelAnterior; nombre: string; avisos: string[] } | null>(null);
+  const [errorAnterior, setErrorAnterior] = useState('');
 
   useEffect(() => guardarConfig(config), [config]);
 
   const erroresConfig = useMemo(() => validarConfig(config), [config]);
-  const mes = useMemo(() => (reporte && hasta ? construirMes(reporte, config, hasta) : null), [reporte, config, hasta]);
+  // Si hay un Excel anterior ya trabajado, se junta con el reporte nuevo (rango completo + lo que ella completó)
+  const combinado = useMemo(() => (reporte && anterior ? combinarConAnterior(reporte, anterior.datos, config) : null), [reporte, anterior, config]);
+  const repEfectivo = combinado?.rep ?? reporte;
+  // "hasta" vacío = todo el rango
+  const hastaEfectivo = repEfectivo ? (hasta && hasta >= repEfectivo.inicio && hasta <= repEfectivo.fin ? hasta : repEfectivo.fin) : '';
+  const mes = useMemo(
+    () => (repEfectivo && hastaEfectivo ? construirMes(repEfectivo, config, hastaEfectivo, combinado?.ediciones) : null),
+    [repEfectivo, config, hastaEfectivo, combinado],
+  );
   const casos = useMemo(() => (mes ? listarCasos(mes) : []), [mes]);
 
   async function cargarArchivo(f: File) {
@@ -32,11 +43,31 @@ export default function App() {
       setConfig(nueva);
       setReporte(rep);
       setNombreArchivo(f.name);
-      setHasta(corteMes(rep));
+      setHasta('');
       setAvisosCarga([...rep.avisos, ...avisos]);
     } catch (e) {
       setReporte(null);
       setError(e instanceof Error ? e.message : 'No se pudo leer el archivo.');
+    }
+  }
+
+  async function cargarAnterior(f: File | null) {
+    setErrorAnterior('');
+    if (!f) {
+      setAnterior(null);
+      setHasta('');
+      return;
+    }
+    try {
+      if (f.size > 30 * 1024 * 1024) throw new Error('El archivo es demasiado grande.');
+      const datos = leerExcelAnterior(new Uint8Array(await f.arrayBuffer()));
+      const { config: nueva, avisos } = aplicarSueldos(datos, config);
+      setConfig(nueva);
+      setAnterior({ datos, nombre: f.name, avisos });
+      setHasta('');
+    } catch (e) {
+      setAnterior(null);
+      setErrorAnterior(e instanceof Error ? e.message : 'No se pudo leer el Excel anterior.');
     }
   }
 
@@ -72,10 +103,14 @@ export default function App() {
             config={config}
             mes={mes}
             casos={casos}
-            hasta={hasta}
+            hasta={hastaEfectivo}
             setHasta={setHasta}
-            avisos={[...avisosCarga, ...(mes?.avisos ?? [])]}
+            rango={repEfectivo ? { inicio: repEfectivo.inicio, fin: repEfectivo.fin } : null}
+            avisos={[...avisosCarga, ...(anterior?.avisos ?? []), ...(combinado?.avisos ?? []), ...(mes?.avisos ?? [])]}
             error={error}
+            anterior={anterior ? { nombre: anterior.nombre, inicio: anterior.datos.inicio, fin: anterior.datos.fin, copiados: combinado?.copiados ?? null } : null}
+            errorAnterior={errorAnterior}
+            onAnterior={cargarAnterior}
             erroresConfig={erroresConfig}
             onArchivo={cargarArchivo}
             irAPersonas={() => setPestana('personas')}

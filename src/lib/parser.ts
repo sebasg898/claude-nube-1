@@ -17,6 +17,8 @@ export interface Reporte {
   fechas: ISODate[];
   personas: RelojPersona[];
   avisos: string[];
+  /** Días del rango sin ningún dato del reloj (al juntar con un Excel anterior con un hueco de días). */
+  sinDatos?: ISODate[];
 }
 
 export class ErrorReporte extends Error {}
